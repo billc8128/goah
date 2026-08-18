@@ -92,7 +92,7 @@ test("recovery kills the recorded runner process before salvaging its worktree",
   const leased = ledger.claimNextWake(clock.now().toISOString(), new Date(clock.now().getTime() + 100).toISOString(), "lease")!;
   const path = await workspace.prepare(leased);
   const running = ledger.markWakeRunning(leased.id, clock.now().toISOString(), "lease");
-  const handle = runner.prepare({ wake: running, context: {}, workspacePath: path, limits: { maxTokens: 100, maxWallClockMs: 10_000, handoffReserveTokens: 10, handoffReserveWallClockMs: 100 }, now: () => clock.now().toISOString(), emit: () => undefined });
+  const handle = runner.prepare({ wake: running, context: {}, workspacePath: path, limits: { maxTotalTokens: 100, maxWallClockMs: 10_000, handoffReserveTokens: 10, handoffReserveWallClockMs: 100 }, now: () => clock.now().toISOString(), emit: () => undefined });
   ledger.attachWakeProcess(running.id, "lease", handle.pid!, clock.now().toISOString());
   handle.begin();
   await waitFor(() => existsSync(join(path, "running.txt")));
@@ -276,7 +276,8 @@ test("official Pi agent core worker completes a structured handoff through the p
   const runner = new ProcessRunner({ command: process.execPath, args: [piWorkerPath()], env: {
     GOAH_PI_PROVIDER: "faux",
     GOAH_PI_MODEL: "faux-goah",
-    GOAH_PI_COMPACT_AT_TOKENS: "1",
+    GOAH_PI_COMPACT_AT_TOKENS: "10",
+    GOAH_PI_RETAIN_CONTEXT_TOKENS: "1",
     GOAH_PI_FAUX_HANDOFF: JSON.stringify({ observations: ["pi core ran"], results: ["ok"], nextSteps: [] }),
   } });
   const supervisor = new Supervisor(ledger, runner, clock);

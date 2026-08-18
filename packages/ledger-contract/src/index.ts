@@ -152,7 +152,7 @@ export interface WakeOutput {
 }
 
 export interface RunLimits {
-  maxTokens: number;
+  maxTotalTokens: number;
   maxWallClockMs: number;
   handoffReserveTokens: number;
   handoffReserveWallClockMs: number;
@@ -354,11 +354,11 @@ export function assertHandoff(value: Handoff): void {
 }
 
 export function assertRunLimits(value: RunLimits): void {
-  if (value.maxTokens <= 0 || value.maxWallClockMs <= 0 || value.handoffReserveTokens <= 0 || value.handoffReserveWallClockMs <= 0) {
+  if (value.maxTotalTokens <= 0 || value.maxWallClockMs <= 0 || value.handoffReserveTokens <= 0 || value.handoffReserveWallClockMs <= 0) {
     throw new Error("run limits must be positive");
   }
-  if (value.handoffReserveTokens >= value.maxTokens) {
-    throw new Error("handoff reserve must be smaller than maxTokens");
+  if (value.handoffReserveTokens >= value.maxTotalTokens) {
+    throw new Error("handoff reserve must be smaller than maxTotalTokens");
   }
   if (value.handoffReserveWallClockMs >= value.maxWallClockMs) {
     throw new Error("handoff wall-clock reserve must be smaller than maxWallClockMs");

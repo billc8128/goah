@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, openSync, closeSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { CONTRACT_VERSION, type AgentProfile, type ConnectorManifest, type MetricProcessSpec } from "@goah/ledger-contract";
+import { CONTRACT_VERSION, type AgentProfile, type ConnectorManifest, type MetricProcessSpec, type RunLimits } from "@goah/ledger-contract";
 import { SqliteLedger } from "@goah/ledger-sqlite";
 import { piWorkerPath, ProcessRunner } from "@goah/runner-pi";
 import { GitWorkspaceManager, renderDashboard, runSupervisorDaemon, Supervisor } from "@goah/supervisor";
@@ -10,6 +10,7 @@ export interface GoahConfig {
   workspace: string;
   stateDir: string;
   runner: { command: string; args: string[]; env?: Record<string, string>; inheritEnv?: string[] };
+  limits?: RunLimits;
   profiles?: AgentProfile[];
   approvers?: string[];
   auditWriters?: string[];
@@ -41,6 +42,7 @@ export function createRuntime(config: GoahConfig): { ledger: SqliteLedger; super
   const runner = new ProcessRunner(config.runner);
   const supervisor = new Supervisor(ledger, runner, new class { now(): Date { return new Date(); } }(), {
     workspace: new GitWorkspaceManager(config.workspace),
+    ...(config.limits ? { limits: config.limits } : {}),
     ...(config.profiles ? { profiles: config.profiles } : {}),
     ...(config.approvers ? { approvers: config.approvers } : {}),
     ...(config.auditWriters ? { auditWriters: config.auditWriters } : {}),
@@ -59,6 +61,7 @@ export function defaultConfig(directory: string): GoahConfig {
     workspace: ".",
     stateDir: ".goah",
     runner: { command: process.execPath, args: ["$GOAH_PI_WORKER"], env: { GOAH_PI_PROVIDER: "anthropic", GOAH_PI_MODEL: "claude-sonnet-4-6", ANTHROPIC_API_KEY: "env:ANTHROPIC_API_KEY" } },
+    limits: { maxTotalTokens: 2_000_000, maxWallClockMs: 3_600_000, handoffReserveTokens: 96_000, handoffReserveWallClockMs: 120_000 },
     profiles: [{ agent: "worker", role: "child" }],
     approvers: ["human", "ceo"],
     auditWriters: ["verifier", "audit"],

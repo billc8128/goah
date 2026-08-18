@@ -40,7 +40,8 @@ export async function runPiWorker(): Promise<void> {
     let compactions = 0;
     const workspace = request.workspacePath ? resolve(request.workspacePath) : undefined;
     const tools = createTools(workspace, (value) => { output = value; }, process.env.GOAH_PI_ALLOW_BASH === "true", rpc, request.wake.startedAt);
-    const compactAt = Number(process.env.GOAH_PI_COMPACT_AT_TOKENS ?? Math.floor(request.limits.maxTokens * 0.6));
+    const contextPolicy = resolveContextPolicy(model.contextWindow, process.env);
+    emit({ kind: "model.capabilities", data: { provider, model: modelId, contextWindowTokens: model.contextWindow, maxOutputTokensPerTurn: model.maxTokens, ...contextPolicy } });
     const suppliedPrompt = typeof request.context === "object" && request.context !== null && !Array.isArray(request.context) && typeof request.context.systemPrompt === "string" ? request.context.systemPrompt : undefined;
     const agent = new Agent({
       initialState: {
@@ -52,12 +53,12 @@ export async function runPiWorker(): Promise<void> {
       getApiKey: (id) => providerApiKey(id),
       transformContext: async (messages) => {
         let view = messages;
-        if (estimateMessages(messages) >= compactAt) {
+        if (estimateMessages(messages) >= contextPolicy.compactAtTokens) {
           compactions += 1;
           emit({ kind: "context.compacted", data: { compaction: compactions, sourceMessageCount: messages.length } });
-          view = compactMessages(messages);
+          view = compactMessagesToTokenBudget(messages, contextPolicy.retainAfterCompactTokens);
         }
-        if (tokensUsed < request.limits.maxTokens - request.limits.handoffReserveTokens) return view;
+        if (tokensUsed < request.limits.maxTotalTokens - request.limits.handoffReserveTokens) return view;
         return [...view, {
           role: "user",
           content: "Handoff reserve is active. Do not call any other tool. Call handoff now with the best verified state available.",
@@ -65,11 +66,11 @@ export async function runPiWorker(): Promise<void> {
         }];
       },
       beforeToolCall: async ({ toolCall }) => {
-        const reserve = tokensUsed >= request.limits.maxTokens - request.limits.handoffReserveTokens;
+        const reserve = tokensUsed >= request.limits.maxTotalTokens - request.limits.handoffReserveTokens;
         if (reserve && toolCall.name !== "handoff") return { block: true, reason: "handoff reserve active; only handoff is allowed" };
         return undefined;
       },
-      shouldStopAfterTurn: () => output !== null || tokensUsed >= request.limits.maxTokens,
+      shouldStopAfterTurn: () => output !== null || tokensUsed >= request.limits.maxTotalTokens,
       toolExecution: "sequential",
     });
     agent.subscribe((event) => {
@@ -139,6 +140,42 @@ export function validateNextWakeAt(value: string | undefined, wakeStartedAt: str
   return new Date(next).toISOString();
 }
 
+export interface ContextPolicy {
+  compactAtTokens: number;
+  retainAfterCompactTokens: number;
+}
+
+export function resolveContextPolicy(contextWindowTokens: number, env: NodeJS.ProcessEnv): ContextPolicy {
+  if (!Number.isInteger(contextWindowTokens) || contextWindowTokens <= 0) throw new Error("model context window is missing");
+  const compactAtTokens = integerSetting(env.GOAH_PI_COMPACT_AT_TOKENS, Math.floor(contextWindowTokens * 0.7));
+  const retainAfterCompactTokens = integerSetting(env.GOAH_PI_RETAIN_CONTEXT_TOKENS, Math.floor(contextWindowTokens * 0.2));
+  if (retainAfterCompactTokens >= compactAtTokens || compactAtTokens >= contextWindowTokens) throw new Error("invalid Pi context policy");
+  return { compactAtTokens, retainAfterCompactTokens };
+}
+
+export function compactMessagesToTokenBudget(messages: AgentMessage[], retainTokens: number): AgentMessage[] {
+  if (messages.length <= 2 || estimateMessages(messages) <= retainTokens) return messages;
+  const tailBudget = Math.max(1, Math.floor(retainTokens * 0.6));
+  let start = messages.length;
+  let retained = 0;
+  while (start > 1) {
+    const tokens = estimateMessages([messages[start - 1]!]);
+    if (retained > 0 && retained + tokens > tailBudget) break;
+    retained += tokens;
+    start -= 1;
+  }
+  const removed = messages.slice(1, start);
+  const rawSummary = removed.map((message, index) => `${index + 1}. ${messageText(message).slice(0, 240)}`).join("\n");
+  const summaryChars = Math.max(0, (retainTokens - retained - 80) * 4);
+  const summary = summaryChars === 0 ? "[older entries truncated]"
+    : rawSummary.length <= summaryChars ? rawSummary : `[older entries truncated]\n${rawSummary.slice(-summaryChars)}`;
+  return [
+    messages[0]!,
+    { role: "user", content: `Compacted model view. Original trace is unchanged. Source message indexes 1-${removed.length}:\n${summary}`, timestamp: Date.now() },
+    ...messages.slice(start),
+  ];
+}
+
 function createRpcTools(rpc: WorkerRpc): AgentTool<any>[] {
   const tool = (name: string, description: string, method: AgentCapability, parameters: ReturnType<typeof Type.Object>): AgentTool<any> => ({
     name, label: name, description, parameters,
@@ -162,6 +199,12 @@ function scoped(workspace: string, path: string): string {
   return resolved;
 }
 function estimateMessages(messages: AgentMessage[]): number { return Math.ceil(JSON.stringify(messages).length / 4); }
+function integerSetting(value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) throw new Error("Pi token settings must be positive integers");
+  return parsed;
+}
 function messageText(message: AgentMessage): string {
   const value = message as Message;
   if (value.role === "user") return typeof value.content === "string" ? value.content : value.content.map((item) => item.type === "text" ? item.text : "[image]").join(" ");

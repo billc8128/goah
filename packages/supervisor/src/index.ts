@@ -131,7 +131,7 @@ export interface SupervisorOptions {
 
 interface MetricCollectorRegistration { goalId: string; spec: MetricProcessSpec; intervalMs: number; nextAt: number }
 
-const defaultLimits: RunLimits = { maxTokens: 4_000, maxWallClockMs: 60_000, handoffReserveTokens: 500, handoffReserveWallClockMs: 5_000 };
+const defaultLimits: RunLimits = { maxTotalTokens: 2_000_000, maxWallClockMs: 3_600_000, handoffReserveTokens: 96_000, handoffReserveWallClockMs: 120_000 };
 
 export class Supervisor {
   readonly #leaseMs: number;

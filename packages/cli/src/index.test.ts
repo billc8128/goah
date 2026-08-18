@@ -15,7 +15,10 @@ test("CLI initializes versioned config, resolves secret references, and enforces
   execFileSync("git", ["commit", "--allow-empty", "-m", "initial"], { cwd: directory });
   const cli = fileURLToPath(new URL("./cli.js", import.meta.url));
   execFileSync(process.execPath, [cli, "init"], { cwd: directory });
-  assert.equal(JSON.parse(readFileSync(join(directory, "goah.config.json"), "utf8")).version, 1);
+  const initialized = JSON.parse(readFileSync(join(directory, "goah.config.json"), "utf8"));
+  assert.equal(initialized.version, 1);
+  assert.equal(initialized.limits.maxTotalTokens, 2_000_000);
+  assert.equal(initialized.limits.maxTokens, undefined);
   process.env.GOAH_CLI_TEST_KEY = "secret";
   const raw = JSON.parse(readFileSync(join(directory, "goah.config.json"), "utf8"));
   raw.runner.env.ANTHROPIC_API_KEY = "env:GOAH_CLI_TEST_KEY";

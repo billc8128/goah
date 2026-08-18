@@ -52,14 +52,14 @@ export class PiRunnerAdapter {
     let tokensUsed = 0;
     let handoffOnly = false;
     try {
-      while (tokensUsed < request.limits.maxTokens) {
+      while (tokensUsed < request.limits.maxTotalTokens) {
         const elapsed = Date.parse(request.now()) - startedAt;
-        handoffOnly ||= tokensUsed >= request.limits.maxTokens - request.limits.handoffReserveTokens
+        handoffOnly ||= tokensUsed >= request.limits.maxTotalTokens - request.limits.handoffReserveTokens
           || elapsed >= request.limits.maxWallClockMs - request.limits.handoffReserveWallClockMs;
         if (elapsed >= request.limits.maxWallClockMs) {
           return { outcome: "abnormal", reason: "wall-clock limit exceeded without a valid handoff", tokensUsed };
         }
-        const step = await session.step({ handoffOnly, remainingTokens: request.limits.maxTokens - tokensUsed });
+        const step = await session.step({ handoffOnly, remainingTokens: request.limits.maxTotalTokens - tokensUsed });
         if (!Number.isInteger(step.tokensUsed) || step.tokensUsed <= 0) {
           return { outcome: "abnormal", reason: "runner returned a non-positive token charge", tokensUsed };
         }

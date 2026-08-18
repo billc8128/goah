@@ -12,3 +12,4 @@
 5. Session verification and global audit share an interface but not inputs. Global audit first receives facts with handoffs, notes, action reasons, and evidence claims removed; reasons are revealed only in phase two.
 6. The supervisor daemon may run different agents concurrently, while `GitWorkspaceManager` serializes all rebase/merge operations.
 7. Calendar-duration soak and real-money operation are evidence-producing deployment activities, not facts that a unit test may claim. The repository supplies daemon templates, an accelerated soak, and a repo-guardian app; operators must publish real elapsed-time evidence separately.
+8. Model context/output capabilities come from the selected provider model manifest; custom providers must supply an explicit capability manifest when their API omits these fields. Compaction is derived from the context window and remains independent from the supervisor's configurable per-wake total-token and wall-clock policy.

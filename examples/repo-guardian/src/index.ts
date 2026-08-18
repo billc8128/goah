@@ -12,16 +12,22 @@ const stateDir = process.env.GOAH_GUARD_STATE ?? join(repo, ".goah");
 mkdirSync(stateDir, { recursive: true });
 const ledger = new SqliteLedger(join(stateDir, "guardian.sqlite"));
 const model = process.env.GOAH_PI_MODEL;
+const piEnv = model ? {
+  GOAH_PI_MODEL: model,
+  GOAH_PI_PROVIDER: process.env.GOAH_PI_PROVIDER ?? "anthropic",
+  GOAH_PI_ALLOW_BASH: "true",
+  ...forwardEnv(["GOAH_PI_BASE_URL", "GOAH_PI_MODEL_CAPABILITIES", "GOAH_PI_COMPACT_AT_TOKENS", "GOAH_PI_RETAIN_CONTEXT_TOKENS", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ARK_API_KEY"]),
+} : null;
 const runner = new ProcessRunner(model
-  ? { command: process.execPath, args: [piWorkerPath()], env: { GOAH_PI_MODEL: model, GOAH_PI_PROVIDER: process.env.GOAH_PI_PROVIDER ?? "anthropic", ...(process.env.GOAH_PI_BASE_URL ? { GOAH_PI_BASE_URL: process.env.GOAH_PI_BASE_URL } : {}), ...(process.env.ANTHROPIC_API_KEY ? { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY } : {}), ...(process.env.OPENAI_API_KEY ? { OPENAI_API_KEY: process.env.OPENAI_API_KEY } : {}), ...(process.env.ARK_API_KEY ? { ARK_API_KEY: process.env.ARK_API_KEY } : {}), GOAH_PI_ALLOW_BASH: "true" } }
+  ? { command: process.execPath, args: [piWorkerPath()], env: piEnv! }
   : { command: process.execPath, args: [fauxRunnerWorkerPath()], env: { GOAH_FAUX_STEPS: JSON.stringify([{ tokens: 10, handoff: { handoff: { observations: ["test status collected"], results: [], nextSteps: ["check again"] }, mail: [], nextWakeAt: new Date(Date.now() + 86_400_000).toISOString() } }]) } });
 const supervisor = new Supervisor(ledger, runner, new class { now(): Date { return new Date(); } }(), {
   workspace: new GitWorkspaceManager(repo),
   ...(model ? { limits: {
-    maxTokens: Number(process.env.GOAH_PI_MAX_TOKENS ?? 24_000),
-    maxWallClockMs: Number(process.env.GOAH_PI_MAX_WALL_CLOCK_MS ?? 180_000),
-    handoffReserveTokens: Number(process.env.GOAH_PI_HANDOFF_RESERVE_TOKENS ?? 6_000),
-    handoffReserveWallClockMs: Number(process.env.GOAH_PI_HANDOFF_RESERVE_WALL_CLOCK_MS ?? 15_000),
+    maxTotalTokens: Number(process.env.GOAH_PI_MAX_TOTAL_TOKENS ?? 2_000_000),
+    maxWallClockMs: Number(process.env.GOAH_PI_MAX_WALL_CLOCK_MS ?? 3_600_000),
+    handoffReserveTokens: Number(process.env.GOAH_PI_HANDOFF_RESERVE_TOKENS ?? 96_000),
+    handoffReserveWallClockMs: Number(process.env.GOAH_PI_HANDOFF_RESERVE_WALL_CLOCK_MS ?? 120_000),
   } } : {}),
   heartbeatPolicies: [{ agent: "guardian", maxSilentMs: 172_800_000, escalateTo: "human" }],
   verifyMetricsAfterWake: Boolean(model),
@@ -53,4 +59,8 @@ if (process.argv.includes("--daemon")) {
   await supervisor.runAvailable(1, model ? 10 : 1);
   writeFileSync(join(stateDir, "status.html"), renderDashboard(ledger));
   ledger.close();
+}
+
+function forwardEnv(names: string[]): Record<string, string> {
+  return Object.fromEntries(names.flatMap((name) => process.env[name] === undefined ? [] : [[name, process.env[name]!]]));
 }
