@@ -23,22 +23,23 @@ goah does not replace your agent runner (pi, or any runner that implements the `
 
 ## Status
 
-**Experimental.** Contracts are `0.1.0` / `experimental` and will change without migration paths.
+**Experimental.** Contracts are `0.1.0` / `experimental`. SQLite schema changes now use explicit, version-checked migrations; public TypeScript contracts may still change before 1.0.
 
 Implemented and tested today (Milestone 0/1A vertical slice):
 
 - Append-only SQLite event ledger with five rebuildable projections (`goals`, `schedule`, `wakes`, `mailbox`, `actions`), event + projection committed in one transaction, fault-injection tested at every state transition
-- Wake lifecycle with leases: per-agent concurrency of one, trigger deduplication, expired-lease recovery (`leased` → requeued, `running` → `abnormal`)
-- Action state machine with `unknown` semantics and query-based reconciliation
-- Connector capability manifests: undeclared capabilities fail closed, external side effects are off by default, automatic retry only with declared native idempotency
-- Per-wake git worktrees with serial rebase-merge, `merge_blocked` on conflict, salvage refs on crash
-- Token / wall-clock limits with a handoff reserve zone
+- FIFO wake lifecycle with leases: per-agent concurrency of one, trigger deduplication, fencing tokens, recorded runner PIDs, and kill-before-salvage recovery
+- Action state machine with real evidence validation, human approval/rejection, `unknown` semantics, and query-based reconciliation
+- Audit advice write/ack APIs and mandatory injection of unacknowledged advice into the action owner's next context
+- Connector capability manifests and isolated connector subprocesses: undeclared capabilities fail closed, ambient secrets are not inherited, automatic retry requires declared native idempotency
+- Per-wake git worktrees with serial rebase-merge, retained refs for `merge_blocked` and abnormal work, and bounded checkout retention
+- Real runner subprocess boundary with token/wall-clock limits, a handoff reserve zone, process-group termination, and stale-event rejection
+- Mail acknowledged atomically with a valid handoff; abnormal wakes leave messages unread for redelivery
+- Injected clocks, schema v1→v2 migration, indexed bounded queries, and a public ledger conformance suite
 
 Designed but **not implemented yet** — do not rely on these:
 
-- Human approval flow for gated actions (gated actions currently stop at `requested` with no approve API)
-- Audit advice delivery (`audit_advice` exists in the schema; nothing writes or injects it yet)
-- Verification layer, metric collection, budgets, multi-agent goal trees, mid-turn compaction for 10h+ runs
+- Model-powered verifier and global-audit roles, metric collection, full budget reservation windows, and mid-turn compaction for 10h+ runs
 
 ## Quick start
 
@@ -48,7 +49,7 @@ Requires Node.js >= 24 (uses `node:sqlite`).
 git clone https://github.com/billc8128/goah.git
 cd goah
 npm install
-npm test          # 14 tests: transaction faults, crash recovery, merge conflicts, connector semantics
+npm test          # contract, transaction-fault, process-recovery, merge, approval, audit, and connector tests
 npm run example   # one full wake: goal → schedule → lease → faux run → handoff → git merge → done
 ```
 
@@ -77,10 +78,11 @@ One wake, step by step:
 
 1. A due `schedule` entry becomes a queued `wake` (deduplicated by `(agent, trigger_ref)`).
 2. The supervisor leases it — one active wake per agent, lease expiry is crash detection.
-3. It hydrates context from the ledger (goals, unread mail, last handoff) and hands the runner a worktree path. The runner never gets a database connection or credentials.
-4. The runner works under token/wall-clock limits. Inside the reserve zone it may only produce a handoff.
-5. A valid handoff (`observations` / `results` / `nextSteps` / `blocker`) is recorded, outgoing mail is delivered, the next wake is scheduled, and the worktree is rebased and merged — or `merge_blocked` on conflict.
-6. Any other exit is `abnormal`: partial work goes to a salvage ref, and a recovery wake can load the abnormal wake's event slice.
+3. It hydrates bounded context from indexed ledger queries: owned goals, unread mail, unacknowledged audit advice, last handoff, and any recovery slice.
+4. The supervisor starts a runner subprocess only after the wake's lease token and PID are recorded. The child gets the context and worktree path, never a database connection or connector credentials.
+5. The process runs under token/wall-clock limits. A timeout kills the process group before the worktree can be salvaged; stale lease tokens cannot append runner events.
+6. A valid handoff atomically records the handoff, acknowledges consumed mail, delivers outgoing mail, and schedules the next wake. The worktree is then rebased and merged — or retained as a `merge_blocked` ref.
+7. Any other exit is `abnormal`: after process death is confirmed, partial work goes to a salvage ref and a recovery wake can load the event slice. Unacknowledged mail remains available.
 
 External actions follow their own state machine, independent of wake success:
 
@@ -100,8 +102,8 @@ requested ─▶ approved ─▶ dispatching ─▶ confirmed
 | `@goah/ledger-contract` | nothing | The contract: types, state machines, schema assertions. Agent-side code depends only on this. |
 | `@goah/ledger-sqlite` | contract | Single-writer SQLite ledger. Append-only events enforced by triggers, projections rebuildable from events. |
 | `@goah/supervisor` | contract | Scheduler, wake lifecycle, action gate, connector dispatch, git workspace manager. Never executes user code in-process. |
-| `@goah/runner-pi` | contract | Runner adapter: limits, handoff reserve, trace forwarding. Bind any session-based runner via the `PiDriver` seam. |
-| `@goah/testkit` | all of the above | Simulated clock, faux driver, mock connector, fault injection. Everything needed to test without keys. |
+| `@goah/runner-pi` | contract | Worker-side Pi adapter plus supervisor-side `ProcessRunner`: IPC, timeout termination, handoff reserve, and trace forwarding. |
+| `@goah/testkit` | all of the above | Simulated clock, faux process worker, isolated mock connector, public ledger conformance suite, and fault injection. |
 
 ## Security model
 
@@ -110,15 +112,16 @@ Read this before pointing goah at anything real.
 Mechanically enforced today:
 
 - No external side effects by default: a connector must declare a capability for an action's kind, and non-dry-run connectors additionally require an explicit supervisor opt-in. Anything undeclared is gated, fail-closed.
-- The agent runner receives hydrated context and a worktree path — never credentials, never a ledger connection.
+- Runner and connector code executes in child processes with minimal environments. Connector secrets are explicitly scoped to that connector; runners never receive them or a ledger connection.
 - The events table is append-only (enforced by SQLite triggers); invalid wake/action state transitions are rejected by both the library and the database.
+- Every action evidence sequence must exist. Gated actions require an authorized approval carrying its own reason and evidence.
+- Mail survives abnormal wakes, and unacknowledged audit advice is forced into the next context.
 - An `unknown` action is never automatically re-dispatched unless the connector manifest explicitly declares native idempotency and automatic retry.
 
 Not guaranteed, by design honesty:
 
 - goah does not make the model's judgment correct. It records reasons and evidence; it cannot verify they are good reasons.
 - goah does not defend against prompt injection inside the agent's own context.
-- The current version has no human approval API and no audit-advice delivery — the accountability loop is not closed yet (see Status).
 
 ## Roadmap
 
@@ -128,7 +131,7 @@ Not guaranteed, by design honesty:
 | 1A — durable core | ✅ shipped: SQLite ledger, wake/action recovery, worktree continuity |
 | 1B — long-wake continuity | 10h+ runs: mid-turn compaction, kill -9 at every compaction phase, no duplicate side effects |
 | 2 — narrow closed loop | one real scenario (repo guardian) running unattended for 14 days |
-| 3 — verification layer | audit advice delivery, calibration/holdout eval, precision + risk-weighted recall |
+| 3 — verification layer | model-powered verifier/global audit, calibration/holdout eval, precision + risk-weighted recall |
 | 4 — multi-agent | goal trees, budgets with reservation semantics, real connectors |
 
 ## Design

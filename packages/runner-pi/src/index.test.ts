@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { RunRequest, WakeSnapshot, WakeOutput } from "@goah/ledger-contract";
-import { PiRunnerAdapter, type PiDriver } from "./index.js";
+import { PiRunnerAdapter, ProcessRunner, type PiDriver } from "./index.js";
 
-const wake: WakeSnapshot = { id: "w", agent: "a", triggerRef: "t", status: "running", leaseUntil: "2026-08-18T00:01:00.000Z", attempt: 1, startedAt: "2026-08-18T00:00:00.000Z", endedAt: null };
+const wake: WakeSnapshot = { id: "w", agent: "a", triggerRef: "t", status: "running", leaseUntil: "2026-08-18T00:01:00.000Z", attempt: 1, startedAt: "2026-08-18T00:00:00.000Z", endedAt: null, enqueuedSeq: 1, leaseToken: "lease", runnerPid: null };
 
 function driver(steps: Array<{ tokens: number; stop?: boolean; requireHandoffOnly?: boolean; handoff?: WakeOutput }>): PiDriver {
   return {
@@ -28,15 +28,19 @@ test("token reserve disables ordinary work and preserves a legal handoff", async
     wake, context: {}, limits: { maxTokens: 1_000, maxWallClockMs: 10_000, handoffReserveTokens: 250, handoffReserveWallClockMs: 1_000 },
     now: () => now, emit: () => undefined,
   };
-  const result = await new PiRunnerAdapter(faux).run(request);
+  const handle = new PiRunnerAdapter(faux).prepare(request);
+  handle.begin();
+  const result = await handle.result;
   assert.equal(result.outcome, "handoff");
 });
 
 test("stopping without handoff is abnormal", async () => {
-  const result = await new PiRunnerAdapter(driver([{ tokens: 10, stop: true }])).run({
+  const handle = new PiRunnerAdapter(driver([{ tokens: 10, stop: true }])).prepare({
     wake, context: {}, limits: { maxTokens: 100, maxWallClockMs: 100, handoffReserveTokens: 10, handoffReserveWallClockMs: 10 },
     now: () => "2026-08-18T00:00:00.000Z", emit: () => undefined,
   });
+  handle.begin();
+  const result = await handle.result;
   assert.deepEqual(result.outcome, "abnormal");
 });
 
@@ -59,9 +63,24 @@ test("wall-clock reserve also switches the runner to handoff-only mode", async (
       };
     },
   };
-  const result = await new PiRunnerAdapter(faux).run({
+  const handle = new PiRunnerAdapter(faux).prepare({
     wake, context: {}, limits: { maxTokens: 100, maxWallClockMs: 100, handoffReserveTokens: 10, handoffReserveWallClockMs: 20 },
     now: () => new Date(nowMs).toISOString(), emit: () => undefined,
   });
+  handle.begin();
+  const result = await handle.result;
   assert.equal(result.outcome, "handoff");
+});
+
+test("ProcessRunner kills a child stuck inside one step before reporting abnormal", async () => {
+  const runner = new ProcessRunner({ command: process.execPath, args: ["-e", "process.stdin.resume(); setInterval(() => {}, 1000)"], killGraceMs: 25 });
+  const handle = runner.prepare({
+    wake, context: {}, limits: { maxTokens: 100, maxWallClockMs: 50, handoffReserveTokens: 10, handoffReserveWallClockMs: 10 },
+    now: () => new Date().toISOString(), emit: () => undefined,
+  });
+  assert.ok(handle.pid);
+  handle.begin();
+  const result = await handle.result;
+  assert.equal(result.outcome, "abnormal");
+  assert.throws(() => process.kill(handle.pid!, 0));
 });

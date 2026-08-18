@@ -2,12 +2,12 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { PiRunnerAdapter } from "@goah/runner-pi";
+import { ProcessRunner } from "@goah/runner-pi";
 import { GitWorkspaceManager, Supervisor } from "@goah/supervisor";
-import { createMemoryLedger, FauxPiDriver, SimulatedClock } from "@goah/testkit";
+import { createMemoryLedger, fauxRunnerWorkerPath, SimulatedClock } from "@goah/testkit";
 
 const clock = new SimulatedClock();
-const ledger = createMemoryLedger();
+const ledger = createMemoryLedger({ clock });
 const repo = mkdtempSync(join(tmpdir(), "goah-example-"));
 runGit(["init", "-b", "main"]);
 runGit(["config", "user.email", "goah@example.test"]);
@@ -16,11 +16,15 @@ writeFileSync(join(repo, "README.md"), "# example artifact workspace\n");
 runGit(["add", "README.md"]);
 runGit(["commit", "-m", "initial"]);
 
-const faux = new FauxPiDriver(clock, [[
-  { tokens: 100, write: { path: "result.txt", content: "north star reached\n" } },
-  { tokens: 50, handoff: { handoff: { observations: ["goal loaded"], results: ["result committed"], nextSteps: [] }, mail: [], nextWakeAt: null } },
-]]);
-const supervisor = new Supervisor(ledger, new PiRunnerAdapter(faux), clock, { workspace: new GitWorkspaceManager(repo) });
+const runner = new ProcessRunner({
+  command: process.execPath,
+  args: [fauxRunnerWorkerPath()],
+  env: { GOAH_FAUX_STEPS: JSON.stringify([
+    { tokens: 100, write: { path: "result.txt", content: "goal reached\n" } },
+    { tokens: 50, handoff: { handoff: { observations: ["goal loaded"], results: ["result committed"], nextSteps: [] }, mail: [], nextWakeAt: null } },
+  ]) },
+});
+const supervisor = new Supervisor(ledger, runner, clock, { workspace: new GitWorkspaceManager(repo) });
 supervisor.createGoal({
   id: "root", parentId: null, objective: "produce one durable artifact",
   metric: { source: "workspace", window: "wake", direction: "at_least", target: 1, freshnessMs: 60_000, onMissing: "abnormal", onStale: "wake_owner" },

@@ -78,6 +78,9 @@ export interface WakeSnapshot {
   attempt: number;
   startedAt: string | null;
   endedAt: string | null;
+  enqueuedSeq: number;
+  leaseToken: string | null;
+  runnerPid: number | null;
 }
 
 export type MailLevel = "fyi" | "decision" | "emergency";
@@ -94,6 +97,7 @@ export interface ActionSnapshot {
   id: string;
   agent: string;
   kind: string;
+  connector: string;
   payload: JsonValue;
   reason: string;
   evidence: number[];
@@ -101,8 +105,15 @@ export interface ActionSnapshot {
   status: ActionStatus;
   reconciledAt: string | null;
   externalRef: string | null;
-  auditAdvice: JsonValue | null;
+  auditAdvice: AuditAdvice | null;
   adviceAcked: boolean;
+}
+
+export interface AuditAdvice {
+  by: string;
+  at: string;
+  body: JsonValue;
+  evidence: number[];
 }
 
 export interface Handoff {
@@ -149,8 +160,17 @@ export type RunnerResult =
   | { outcome: "handoff"; output: WakeOutput; tokensUsed: number }
   | { outcome: "abnormal"; reason: string; tokensUsed: number };
 
+export interface RunnerHandle {
+  pid: number | null;
+  begin(): void;
+  result: Promise<RunnerResult>;
+  terminate(): Promise<void>;
+}
+
 export interface Runner {
-  run(request: RunRequest): Promise<RunnerResult>;
+  readonly isolation: "process";
+  prepare(request: RunRequest): RunnerHandle;
+  terminateProcess(pid: number): Promise<void>;
 }
 
 export interface Clock {
@@ -187,10 +207,21 @@ export interface ConnectorQueryResult {
   externalRef?: string;
 }
 
-export interface Connector {
+export interface ConnectorProcessSpec {
   manifest: ConnectorManifest;
-  dispatch(action: ActionSnapshot): Promise<ConnectorDispatchResult>;
-  query(action: ActionSnapshot): Promise<ConnectorQueryResult>;
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+  timeoutMs?: number;
+}
+
+export interface HandoffCommit {
+  agent: string;
+  wakeId: string;
+  ts: string;
+  output: WakeOutput;
+  outgoingMail: MailSnapshot[];
+  schedule: ScheduleSnapshot | null;
 }
 
 export interface Ledger {
@@ -198,15 +229,31 @@ export interface Ledger {
   putGoal(goal: GoalSnapshot, actor: string, wakeId?: string): EventRecord;
   putSchedule(schedule: ScheduleSnapshot, actor: string, wakeId?: string): EventRecord;
   enqueueWake(wake: WakeSnapshot, actor: string): { event: EventRecord; created: boolean };
-  claimNextWake(now: string, leaseUntil: string): WakeSnapshot | null;
-  markWakeRunning(id: string, now: string): WakeSnapshot;
+  claimNextWake(now: string, leaseUntil: string, leaseToken: string): WakeSnapshot | null;
+  markWakeRunning(id: string, now: string, leaseToken: string): WakeSnapshot;
+  attachWakeProcess(id: string, leaseToken: string, pid: number, now: string): WakeSnapshot;
   finishWake(id: string, status: "done" | "abnormal" | "merge_blocked", now: string): WakeSnapshot;
-  recoverExpiredWakes(now: string): { requeued: WakeSnapshot[]; abnormal: WakeSnapshot[] };
-  requestAction(action: ActionSnapshot, wakeId?: string): EventRecord;
+  expiredWakes(now: string): WakeSnapshot[];
+  recoverExpiredWake(id: string, now: string): WakeSnapshot;
+  appendRunnerEvent(input: Omit<EventRecord, "seq">, leaseToken: string): EventRecord;
+  requestAction(action: ActionSnapshot, actor: string, wakeId?: string): EventRecord;
+  approveAction(id: string, approver: string, reason: string, evidence: number[]): ActionSnapshot;
+  rejectAction(id: string, approver: string, reason: string, evidence: number[]): ActionSnapshot;
   transitionAction(id: string, status: ActionStatus, patch?: Partial<Pick<ActionSnapshot, "externalRef" | "reconciledAt">>): ActionSnapshot;
   recoverDispatchingActions(): ActionSnapshot[];
+  putAuditAdvice(id: string, advice: Omit<AuditAdvice, "at">, wakeId?: string): ActionSnapshot;
+  ackAuditAdvice(id: string, agent: string): ActionSnapshot;
   putMail(mail: MailSnapshot, actor: string, wakeId?: string): EventRecord;
-  markMailReadForAgent(agent: string, readAt: string, wakeId: string): MailSnapshot[];
+  commitHandoff(commit: HandoffCommit): EventRecord;
+  dueSchedules(now: string): ScheduleSnapshot[];
+  unreadMail(agent: string): MailSnapshot[];
+  unackedAuditAdvice(agent: string): ActionSnapshot[];
+  lastEvent(agent: string, kind: string): EventRecord | null;
+  eventsForWake(wakeId: string): EventRecord[];
+  wake(id: string): WakeSnapshot | null;
+  wakeByTrigger(agent: string, triggerRef: string): WakeSnapshot | null;
+  action(id: string): ActionSnapshot | null;
+  goalsForOwner(owner: string): GoalSnapshot[];
   events(): EventRecord[];
   goals(): GoalSnapshot[];
   schedules(): ScheduleSnapshot[];
@@ -220,7 +267,7 @@ export interface Ledger {
 const wakeTransitions: Record<WakeStatus, readonly WakeStatus[]> = {
   queued: ["leased", "abnormal"],
   leased: ["queued", "running", "abnormal"],
-  running: ["queued", "done", "abnormal", "merge_blocked"],
+  running: ["done", "abnormal", "merge_blocked"],
   done: [],
   abnormal: [],
   merge_blocked: [],
@@ -265,6 +312,7 @@ export function assertActionRequest(value: ActionSnapshot): void {
   if (!value.reason.trim()) throw new Error("action reason is required");
   if (value.evidence.length === 0) throw new Error("action evidence is required");
   if (value.status !== "requested") throw new Error("new action must be requested");
+  if (!value.connector.trim()) throw new Error("action connector is required");
   if (value.reconciledAt !== null) throw new Error("requested action cannot be reconciled");
 }
 
