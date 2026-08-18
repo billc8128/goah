@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.goah.supervisor</string>
+  <key>WorkingDirectory</key><string>/opt/goah</string>
+  <key>ProgramArguments</key><array><string>/usr/local/bin/npm</string><string>--workspace</string><string>@goah/example-repo-guardian</string><string>run</string><string>start</string><string>--</string><string>--daemon</string></array>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>5</integer>
+  <key>StandardOutPath</key><string>/opt/goah/.goah/supervisor.log</string>
+  <key>StandardErrorPath</key><string>/opt/goah/.goah/supervisor.error.log</string>
+</dict></plist>

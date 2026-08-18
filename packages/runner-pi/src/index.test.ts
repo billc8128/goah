@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { RunRequest, WakeSnapshot, WakeOutput } from "@goah/ledger-contract";
 import { PiRunnerAdapter, ProcessRunner, type PiDriver } from "./index.js";
+import { compactMessages } from "./pi-worker.js";
 
 const wake: WakeSnapshot = { id: "w", agent: "a", triggerRef: "t", status: "running", leaseUntil: "2026-08-18T00:01:00.000Z", attempt: 1, startedAt: "2026-08-18T00:00:00.000Z", endedAt: null, enqueuedSeq: 1, leaseToken: "lease", runnerPid: null };
 
@@ -83,4 +84,14 @@ test("ProcessRunner kills a child stuck inside one step before reporting abnorma
   const result = await handle.result;
   assert.equal(result.outcome, "abnormal");
   assert.throws(() => process.kill(handle.pid!, 0));
+});
+
+test("mid-turn compaction changes only the model view and preserves boundary messages", () => {
+  const messages = Array.from({ length: 20 }, (_, index) => ({ role: "user" as const, content: `constraint-${index}`, timestamp: index }));
+  const original = JSON.stringify(messages);
+  const compacted = compactMessages(messages, 4);
+  assert.equal(JSON.stringify(messages), original);
+  assert.equal(compacted[0], messages[0]);
+  assert.deepEqual(compacted.slice(-4), messages.slice(-4));
+  assert.match((compacted[1] as { content: string }).content, /Source message indexes/);
 });

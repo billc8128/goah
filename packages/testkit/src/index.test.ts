@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { CONTRACT_VERSION, type GoalSnapshot, type WakeSnapshot } from "@goah/ledger-contract";
-import { ProcessRunner } from "@goah/runner-pi";
-import { GitWorkspaceManager, Supervisor } from "@goah/supervisor";
+import { piWorkerPath, ProcessRunner } from "@goah/runner-pi";
+import { calibrateVerificationThreshold, evaluateVerification, GitWorkspaceManager, renderDashboard, runSupervisorDaemon, Supervisor, VerificationPlane, type VerifierModel } from "@goah/supervisor";
 import { assertLedgerConformance, createMemoryLedger, fauxRunnerWorkerPath, MockConnector, SimulatedClock } from "./index.js";
 
 const metric = { source: "test", window: "1h", direction: "at_least" as const, target: 1, freshnessMs: 60_000, onMissing: "abnormal" as const, onStale: "wake_owner" as const };
@@ -169,6 +169,118 @@ test("connector subprocess does not inherit ambient supervisor secrets", async (
   } finally {
     delete process.env.GOAH_AMBIENT_SECRET_TEST;
   }
+});
+
+test("schedule, mail, metric, and heartbeat triggers are durable and coalesced", async () => {
+  const clock = new SimulatedClock();
+  const ledger = createMemoryLedger({ clock });
+  const supervisor = new Supervisor(ledger, fauxRunner([{ tokens: 5, handoff: { handoff: { observations: [], results: [], nextSteps: [] }, mail: [], nextWakeAt: null } }]), clock, {
+    heartbeatPolicies: [{ agent: "silent", maxSilentMs: 100, escalateTo: "ceo", since: new Date(clock.now().getTime() - 1_000).toISOString() }],
+  });
+  supervisor.createGoal(goal());
+  ledger.putMail({ id: "decision", to: "worker", from: "human", level: "decision", body: {}, readAt: null }, "human");
+  supervisor.planWake("worker", clock.now().toISOString(), "scheduled");
+  const evaluation = supervisor.recordMetric({ goalId: "root", source: "test", observedAt: clock.now().toISOString(), value: 0 });
+  assert.equal(evaluation.status, "missed");
+  await supervisor.tick();
+  assert.equal(ledger.wakes().filter((wake) => wake.agent === "worker").length, 1);
+  assert.equal(ledger.wakes().some((wake) => wake.agent === "ceo" && wake.status === "queued"), true);
+  assert.equal(ledger.events().some((event) => event.kind === "wake.trigger_coalesced"), true);
+  assert.equal(ledger.events().some((event) => event.kind === "watchdog.heartbeat_violation"), true);
+  ledger.close();
+});
+
+test("verification plane enforces blind-first audit and reports calibrated metrics", async () => {
+  const clock = new SimulatedClock();
+  const ledger = createMemoryLedger({ clock });
+  const supervisor = new Supervisor(ledger, fauxRunner([]), clock);
+  supervisor.createGoal(goal());
+  const evidence = ledger.appendEvent({ ts: clock.now().toISOString(), agent: "worker", kind: "tool.fact", data: { value: 1 }, wakeId: "w" });
+  ledger.requestAction({ id: "a", agent: "worker", kind: "mock.write", connector: "mock", payload: {}, reason: "private rationale", evidence: [evidence.seq], gated: false, status: "requested", reconciledAt: null, externalRef: null, auditAdvice: null, adviceAcked: false }, "worker", "w");
+  ledger.appendEvent({ ts: clock.now().toISOString(), agent: "worker", kind: "handoff.recorded", data: { results: ["claimed"] }, wakeId: "w" });
+  let blindPayload = "";
+  const model: VerifierModel = {
+    verifySession: async () => ({ findings: [{ actionId: "a", body: { issue: "unsupported" }, evidence: [evidence.seq], riskWeight: 2 }], tokensUsed: 10 }),
+    blindAudit: async (facts) => { blindPayload = JSON.stringify(facts); return { findings: [], tokensUsed: 5 }; },
+    reasonAudit: async () => ({ findings: [], tokensUsed: 5 }),
+  };
+  const plane = new VerificationPlane(ledger, supervisor, model);
+  await plane.verifySession("w");
+  assert.equal(ledger.unackedAuditAdvice("worker").length, 1);
+  await plane.auditGlobal();
+  assert.doesNotMatch(blindPayload, /private rationale|claimed/);
+  assert.deepEqual(evaluateVerification([
+    { id: "high", shouldFlag: true, riskWeight: 9 },
+    { id: "low", shouldFlag: true, riskWeight: 1 },
+    { id: "ok", shouldFlag: false, riskWeight: 1 },
+  ], ["high", "ok"]), { precision: 0.5, riskWeightedRecall: 0.9 });
+  assert.equal(calibrateVerificationThreshold([
+    { id: "high", shouldFlag: true, riskWeight: 9 }, { id: "low", shouldFlag: true, riskWeight: 1 }, { id: "ok", shouldFlag: false, riskWeight: 1 },
+  ], [{ id: "high", score: 0.9 }, { id: "low", score: 0.4 }, { id: "ok", score: 0.6 }], 0.9), 0.9);
+  ledger.close();
+});
+
+test("two agents run concurrently while CEO context and dashboard see the organization", async () => {
+  const clock = new SimulatedClock();
+  const ledger = createMemoryLedger({ clock });
+  const runner = fauxRunner([{ tokens: 5, delayMs: 50 }, { tokens: 5, handoff: { handoff: { observations: [], results: ["done"], nextSteps: [] }, mail: [], nextWakeAt: null } }]);
+  const supervisor = new Supervisor(ledger, runner, clock, { profiles: [{ agent: "ceo", role: "ceo" }, { agent: "a", role: "child" }, { agent: "b", role: "child" }] });
+  ledger.putGoal({ id: "root", parentId: null, objective: "organization", metric, target: 1, owner: "ceo", budget: null, phase: "active", revision: 0 }, "human");
+  ledger.putGoal({ id: "a-goal", parentId: "root", objective: "a", metric, target: 1, owner: "a", budget: null, phase: "active", revision: 0 }, "ceo");
+  ledger.putGoal({ id: "b-goal", parentId: "root", objective: "b", metric, target: 1, owner: "b", budget: null, phase: "active", revision: 0 }, "ceo");
+  supervisor.planWake("a", clock.now().toISOString(), "a");
+  supervisor.planWake("b", clock.now().toISOString(), "b");
+  const completed = await supervisor.runAvailable(2);
+  assert.deepEqual(completed.map((wake) => wake.agent).sort(), ["a", "b"]);
+  assert.match(renderDashboard(ledger), /organization/);
+
+  const ceoContext = join(mkdtempSync(join(tmpdir(), "goah-context-")), "context.json");
+  const ceoSupervisor = new Supervisor(ledger, fauxRunner([{ tokens: 5, handoff: { handoff: { observations: [], results: [], nextSteps: [] }, mail: [], nextWakeAt: null } }], ceoContext), clock, { profiles: [{ agent: "ceo", role: "ceo" }] });
+  ceoSupervisor.planWake("ceo", clock.now().toISOString(), "replan");
+  await ceoSupervisor.tick();
+  assert.equal((JSON.parse(readFileSync(ceoContext, "utf8")) as { goals: unknown[] }).goals.length, 3);
+
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), 20);
+  await runSupervisorDaemon(supervisor, { pollMs: 5, concurrency: 2, signal: controller.signal });
+  ledger.close();
+});
+
+test("accelerated 30-day soak keeps wake context bounded and projections replayable", async () => {
+  const clock = new SimulatedClock();
+  const ledger = createMemoryLedger({ clock });
+  const contextFile = join(mkdtempSync(join(tmpdir(), "goah-soak-")), "context.json");
+  const supervisor = new Supervisor(ledger, fauxRunner([{ tokens: 2, handoff: { handoff: { observations: ["healthy"], results: [], nextSteps: [] }, mail: [], nextWakeAt: null } }], contextFile), clock);
+  supervisor.createGoal(goal());
+  for (let day = 0; day < 30; day += 1) {
+    supervisor.planWake("worker", clock.now().toISOString(), `day-${day}`);
+    assert.equal((await supervisor.tick())?.status, "done");
+    assert.ok(readFileSync(contextFile).byteLength < 20_000);
+    clock.advance(86_400_000);
+  }
+  assert.equal(ledger.wakes().filter((wake) => wake.status === "done").length, 30);
+  const before = JSON.stringify({ goals: ledger.goals(), wakes: ledger.wakes(), schedules: ledger.schedules() });
+  ledger.rebuildProjections();
+  assert.equal(JSON.stringify({ goals: ledger.goals(), wakes: ledger.wakes(), schedules: ledger.schedules() }), before);
+  ledger.close();
+});
+
+test("official Pi agent core worker completes a structured handoff through the process boundary", async () => {
+  const clock = new SimulatedClock();
+  const ledger = createMemoryLedger({ clock });
+  const runner = new ProcessRunner({ command: process.execPath, args: [piWorkerPath()], env: {
+    GOAH_PI_PROVIDER: "faux",
+    GOAH_PI_MODEL: "faux-goah",
+    GOAH_PI_COMPACT_AT_TOKENS: "1",
+    GOAH_PI_FAUX_HANDOFF: JSON.stringify({ observations: ["pi core ran"], results: ["ok"], nextSteps: [] }),
+  } });
+  const supervisor = new Supervisor(ledger, runner, clock);
+  supervisor.createGoal(goal()); supervisor.planWake("worker", clock.now().toISOString(), "pi integration");
+  assert.equal((await supervisor.tick())?.status, "done");
+  assert.equal(ledger.events().some((event) => event.kind.startsWith("runner.pi.")), true);
+  assert.equal(ledger.events().some((event) => event.kind === "runner.context.compacted"), true);
+  assert.deepEqual(ledger.lastEvent("worker", "handoff.recorded")?.data, { observations: ["pi core ran"], results: ["ok"], nextSteps: [] });
+  ledger.close();
 });
 
 async function waitFor(predicate: () => boolean): Promise<void> {

@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
 import {
   assertHandoff,
   assertRunLimits,
@@ -85,6 +86,8 @@ export interface ProcessRunnerOptions {
   inheritEnv?: string[];
   killGraceMs?: number;
 }
+
+export function piWorkerPath(): string { return fileURLToPath(new URL("./pi-worker.js", import.meta.url)); }
 
 type WorkerRequest = Omit<RunRequest, "now" | "emit">;
 type WorkerMessage =

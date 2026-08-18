@@ -11,7 +11,10 @@
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
     "test": "npm run build && node --test packages/*/dist/*.test.js",
-    "example": "npm run build && node examples/minimal/dist/index.js"
+    "test:soak": "npm run build && node --test --test-name-pattern='accelerated 30-day soak' packages/testkit/dist/index.test.js",
+    "soak:real": "npm run build && node scripts/run-soak.mjs",
+    "example": "npm run build && node examples/minimal/dist/index.js",
+    "example:guardian": "npm run build && node examples/repo-guardian/dist/index.js"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

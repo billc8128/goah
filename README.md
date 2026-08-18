@@ -25,7 +25,7 @@ goah does not replace your agent runner (pi, or any runner that implements the `
 
 **Experimental.** Contracts are `0.1.0` / `experimental`. SQLite schema changes now use explicit, version-checked migrations; public TypeScript contracts may still change before 1.0.
 
-Implemented and tested today (Milestone 0/1A vertical slice):
+Implemented and tested today:
 
 - Append-only SQLite event ledger with five rebuildable projections (`goals`, `schedule`, `wakes`, `mailbox`, `actions`), event + projection committed in one transaction, fault-injection tested at every state transition
 - FIFO wake lifecycle with leases: per-agent concurrency of one, trigger deduplication, fencing tokens, recorded runner PIDs, and kill-before-salvage recovery
@@ -35,11 +35,16 @@ Implemented and tested today (Milestone 0/1A vertical slice):
 - Per-wake git worktrees with serial rebase-merge, retained refs for `merge_blocked` and abnormal work, and bounded checkout retention
 - Real runner subprocess boundary with token/wall-clock limits, a handoff reserve zone, process-group termination, and stale-event rejection
 - Mail acknowledged atomically with a valid handoff; abnormal wakes leave messages unread for redelivery
-- Injected clocks, schema v1→v2 migration, indexed bounded queries, and a public ledger conformance suite
+- Injected clocks, schema v1→v3 migration, indexed bounded queries, and a public ledger conformance suite
+- Mechanical metric evaluation (missing/stale/sustain/guardrails), heartbeat escalation, trigger coalescing, FTS5 fact search, and goal-budget reservation windows
+- Official Pi 0.84.2 worker binding with workspace tools and model-view-only mid-turn compaction
+- Concurrent child agents, CEO global context, serialized artifact merges, resident daemon loop, and a static read-only dashboard
+- Session verifier plus blind-first global audit interfaces, audit-advice delivery, and precision/risk-weighted-recall evaluation
+- Repo-guardian reference application, systemd/launchd templates, and an accelerated 30-day replay/continuity soak
 
-Designed but **not implemented yet** — do not rely on these:
+Operational acceptance evidence **not yet produced**:
 
-- Model-powered verifier and global-audit roles, metric collection, full budget reservation windows, and mid-turn compaction for 10h+ runs
+- Real 7/14-day wall-clock soak evidence, a public sanitized long-run ledger, calibrated production verifier labels, and explicitly authorized small-money operation
 
 ## Quick start
 
@@ -51,6 +56,8 @@ cd goah
 npm install
 npm test          # contract, transaction-fault, process-recovery, merge, approval, audit, and connector tests
 npm run example   # one full wake: goal → schedule → lease → faux run → handoff → git merge → done
+npm run example:guardian
+npm run test:soak
 ```
 
 The example runs entirely offline: a simulated clock, an in-memory ledger, a faux driver instead of a real model, and a throwaway git repo. No API keys are involved anywhere in this codebase.
@@ -127,12 +134,12 @@ Not guaranteed, by design honesty:
 
 | Milestone | Scope |
 |---|---|
-| 0 — contracts & failure semantics | ✅ shipped: state machines, transaction boundaries, fault-injection tests |
-| 1A — durable core | ✅ shipped: SQLite ledger, wake/action recovery, worktree continuity |
-| 1B — long-wake continuity | 10h+ runs: mid-turn compaction, kill -9 at every compaction phase, no duplicate side effects |
-| 2 — narrow closed loop | one real scenario (repo guardian) running unattended for 14 days |
-| 3 — verification layer | model-powered verifier/global audit, calibration/holdout eval, precision + risk-weighted recall |
-| 4 — multi-agent | goal trees, budgets with reservation semantics, real connectors |
+| 0 — contracts & failure semantics | ✅ implementation complete: metric/action/wake/connector contracts, FTS5, conformance and fault injection |
+| 1A — durable core | ✅ implementation complete: daemon, process isolation, leases, recovery, worktree continuity, Pi binding |
+| 1B — long-wake continuity | ✅ implementation complete: model-view compaction and accelerated continuity tests; real 10h soak still operational evidence |
+| 2 — narrow closed loop | ✅ repo-guardian implementation complete; real unattended 14-day run still operational evidence |
+| 3 — verification layer | ✅ verifier/global-audit interfaces, blind-first isolation and evaluation implemented; production calibration dataset remains operational work |
+| 4 — multi-agent | ✅ concurrent agents, CEO context, mailbox, budgets and dashboard implemented; real-money trial requires explicit human authorization |
 
 ## Design
 

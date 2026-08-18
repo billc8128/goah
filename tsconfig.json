@@ -6,6 +6,7 @@
     { "path": "packages/runner-pi" },
     { "path": "packages/supervisor" },
     { "path": "packages/testkit" },
-    { "path": "examples/minimal" }
+    { "path": "examples/minimal" },
+    { "path": "examples/repo-guardian" }
   ]
 }

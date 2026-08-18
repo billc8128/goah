@@ -22,7 +22,7 @@ test("event and projection roll back together at the injected transaction bounda
 
 test("schema has events plus five projections and replay reproduces all of them", () => {
   const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
-  const tables = (ledger.db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as Array<{ name: string }>).map(({ name }) => name);
+  const tables = (ledger.db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name IN ('actions','events','goals','mailbox','schedule','wakes') ORDER BY name").all() as Array<{ name: string }>).map(({ name }) => name);
   assert.deepEqual(tables, ["actions", "events", "goals", "mailbox", "schedule", "wakes"]);
   const root: GoalSnapshot = { id: "root", parentId: null, objective: "keep tests green", metric, target: 1, owner: "agent-1", budget: null, phase: "active", revision: 0 };
   ledger.putGoal(root, "human");
@@ -134,12 +134,26 @@ test("schema v1 is migrated without rewriting event history", () => {
   assert.equal(ledger.wake("w")?.enqueuedSeq, 1);
   assert.match(ledger.wake("w")?.leaseToken ?? "", /^legacy:/);
   assert.equal(ledger.action("a")?.connector, "legacy");
-  assert.equal((ledger.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 2);
+  assert.equal((ledger.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 3);
   assert.equal(ledger.events().length, 2);
   ledger.rebuildProjections();
   assert.equal(ledger.wake("w")?.enqueuedSeq, 1);
   assert.equal(ledger.wake("w")?.status, "leased");
   ledger.close();
+});
+
+test("schema v2 migration builds the FTS index from existing events", () => {
+  const path = join(mkdtempSync(join(tmpdir(), "goah-v2-")), "ledger.sqlite");
+  const ledger = new SqliteLedger(path, { clock: new FixedClock() });
+  ledger.appendEvent({ ts: "2030-01-01T00:00:00.000Z", agent: "a", kind: "fact", data: { text: "migrationsearchterm" }, wakeId: null });
+  ledger.close();
+  const raw = new DatabaseSync(path);
+  raw.exec("DROP TRIGGER events_fts_insert; DROP TABLE events_fts; PRAGMA user_version=2");
+  raw.close();
+  const migrated = new SqliteLedger(path, { clock: new FixedClock() });
+  assert.equal(migrated.searchEvents("migrationsearchterm").length, 1);
+  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 3);
+  migrated.close();
 });
 
 test("goal parent cannot be changed during an update", () => {
@@ -148,6 +162,25 @@ test("goal parent cannot be changed during an update", () => {
   ledger.putGoal({ id: "p2", parentId: null, objective: "p2", metric, target: 1, owner: "other", budget: null, phase: "active", revision: 0 }, "human");
   ledger.putGoal({ id: "child", parentId: "p1", objective: "c", metric, target: 1, owner: "child", budget: null, phase: "active", revision: 0 }, "owner");
   assert.throws(() => ledger.putGoal({ id: "child", parentId: "p2", objective: "c", metric, target: 1, owner: "child", budget: null, phase: "active", revision: 1 }, "owner"), /reparenting/);
+  ledger.close();
+});
+
+test("FTS searches event facts and budget approval reserves available funds", () => {
+  const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
+  ledger.putGoal({ id: "root", parentId: null, objective: "budget", metric, target: 1, owner: "a", budget: { currency: "USD", limit: 100, window: "goal" }, phase: "active", revision: 0 }, "human");
+  const evidence = ledger.appendEvent({ ts: "2030-01-01T00:00:00.000Z", agent: "a", kind: "observation", data: { note: "uniquenebulafact" }, wakeId: null });
+  assert.equal(ledger.searchEvents("uniquenebulafact").map((event) => event.seq).includes(evidence.seq), true);
+  ledger.requestAction({ ...action("spend-1", [evidence.seq]), payload: { amount: 60, currency: "USD" } }, "a");
+  ledger.approveAction("spend-1", "human", "within budget", [evidence.seq]);
+  assert.equal(ledger.budgetExposure("a", "2030-01-01T00:00:00.000Z")?.reserved, 60);
+  ledger.requestAction({ ...action("spend-2", [evidence.seq]), payload: { amount: 50, currency: "USD" } }, "a");
+  assert.throws(() => ledger.approveAction("spend-2", "human", "too much", [evidence.seq]), /exceeds/);
+  ledger.transitionAction("spend-1", "dispatching");
+  ledger.transitionAction("spend-1", "confirmed");
+  const exposure = ledger.budgetExposure("a", "2030-01-01T00:00:00.000Z");
+  assert.equal(exposure?.reserved, 0);
+  assert.equal(exposure?.actual, 60);
+  assert.equal(exposure?.available, 40);
   ledger.close();
 });
 

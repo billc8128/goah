@@ -6,6 +6,7 @@ import {
   type ActionSnapshot,
   type ActionStatus,
   type AuditAdvice,
+  type BudgetExposure,
   type Clock,
   type EventRecord,
   type GoalSnapshot,
@@ -13,6 +14,7 @@ import {
   type JsonValue,
   type Ledger,
   type MailSnapshot,
+  type MetricSample,
   type ProjectionName,
   type ScheduleSnapshot,
   type WakeSnapshot,
@@ -22,7 +24,7 @@ type FaultPoint = "after_event_before_projection";
 type FaultInjector = (point: FaultPoint) => void;
 type Row = Record<string, unknown>;
 
-export const SQLITE_SCHEMA_VERSION = 2;
+export const SQLITE_SCHEMA_VERSION = 3;
 
 const createWakes = `CREATE TABLE IF NOT EXISTS wakes (
   id TEXT PRIMARY KEY,
@@ -65,11 +67,15 @@ CREATE INDEX IF NOT EXISTS schedule_due ON schedule(next_wake_at);
 CREATE INDEX IF NOT EXISTS events_agent_kind_seq ON events(agent, kind, seq DESC);
 CREATE INDEX IF NOT EXISTS events_wake_seq ON events(wake_id, seq);
 CREATE INDEX IF NOT EXISTS actions_agent_status ON actions(agent, status);
+CREATE UNIQUE INDEX IF NOT EXISTS goals_one_active_budget_owner ON goals(owner) WHERE budget IS NOT NULL AND phase='active';
+CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(agent, kind, data, content='events', content_rowid='seq');
 
 CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
 BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
 BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS events_fts_insert AFTER INSERT ON events
+BEGIN INSERT INTO events_fts(rowid,agent,kind,data) VALUES (new.seq,new.agent,new.kind,new.data); END;
 
 CREATE TRIGGER IF NOT EXISTS wakes_valid_transition BEFORE UPDATE OF status ON wakes
 WHEN OLD.status <> NEW.status AND NOT (
@@ -156,6 +162,8 @@ export class SqliteLedger implements Ledger {
       this.db.exec(`PRAGMA user_version = ${SQLITE_SCHEMA_VERSION}`);
     } else if (version === 1) {
       this.#migrateV1();
+    } else if (version === 2) {
+      this.#migrateV2();
     } else {
       this.db.exec(schema);
     }
@@ -272,6 +280,7 @@ export class SqliteLedger implements Ledger {
   }
 
   approveAction(id: string, approver: string, reason: string, evidence: number[]): ActionSnapshot {
+    this.#assertBudgetAvailable(this.#requiredAction(id));
     return this.#decideAction(id, "approved", approver, reason, evidence);
   }
 
@@ -345,8 +354,38 @@ export class SqliteLedger implements Ledger {
   eventsForWake(wakeId: string): EventRecord[] { return (this.db.prepare("SELECT * FROM events WHERE wake_id=? ORDER BY seq").all(wakeId) as Row[]).map(mapEvent); }
   wake(id: string): WakeSnapshot | null { const row = this.db.prepare("SELECT * FROM wakes WHERE id=?").get(id) as Row | undefined; return row ? mapWake(row) : null; }
   wakeByTrigger(agent: string, triggerRef: string): WakeSnapshot | null { const row = this.db.prepare("SELECT * FROM wakes WHERE agent=? AND trigger_ref=?").get(agent, triggerRef) as Row | undefined; return row ? mapWake(row) : null; }
+  queuedWakeForAgent(agent: string): WakeSnapshot | null { const row = this.db.prepare("SELECT * FROM wakes WHERE agent=? AND status='queued' ORDER BY enqueued_seq LIMIT 1").get(agent) as Row | undefined; return row ? mapWake(row) : null; }
   action(id: string): ActionSnapshot | null { const row = this.db.prepare("SELECT * FROM actions WHERE id=?").get(id) as Row | undefined; return row ? mapAction(row) : null; }
   goalsForOwner(owner: string): GoalSnapshot[] { return (this.db.prepare("SELECT * FROM goals WHERE owner=? ORDER BY id").all(owner) as Row[]).map(mapGoal); }
+  goal(id: string): GoalSnapshot | null { return this.#getGoal(id); }
+  triggeringMail(): MailSnapshot[] { return (this.db.prepare("SELECT * FROM mailbox WHERE read_at IS NULL AND level IN ('decision','emergency') ORDER BY rowid").all() as Row[]).map(mapMail); }
+  eventsSince(seq: number, kinds?: string[]): EventRecord[] {
+    const events = (this.db.prepare("SELECT * FROM events WHERE seq>? ORDER BY seq").all(seq) as Row[]).map(mapEvent);
+    return kinds?.length ? events.filter((event) => kinds.includes(event.kind)) : events;
+  }
+  searchEvents(query: string, limit = 50): EventRecord[] {
+    return (this.db.prepare("SELECT e.* FROM events_fts f JOIN events e ON e.seq=f.rowid WHERE events_fts MATCH ? ORDER BY rank LIMIT ?").all(query, limit) as Row[]).map(mapEvent);
+  }
+  budgetExposure(agent: string, at: string): BudgetExposure | null {
+    const goal = this.goalsForOwner(agent).find((item) => item.phase === "active" && item.budget);
+    if (!goal?.budget) return null;
+    const start = budgetWindowStart(goal.budget.window, at);
+    const rows = this.db.prepare(`SELECT a.*, (SELECT ts FROM events e WHERE e.kind='action.requested' AND json_extract(e.data,'$.snapshot.id')=a.id ORDER BY seq LIMIT 1) requested_at FROM actions a WHERE agent=? AND status IN ('approved','dispatching','unknown','confirmed')`).all(agent) as Row[];
+    let reserved = 0;
+    let actual = 0;
+    for (const row of rows) {
+      if (start && String(row.requested_at ?? "") < start) continue;
+      const payload = JSON.parse(String(row.payload)) as Record<string, unknown>;
+      const amount = typeof payload.amount === "number" ? payload.amount : 0;
+      if (amount === 0) continue;
+      if (payload.currency !== goal.budget.currency) throw new Error("action currency does not match goal budget");
+      if (row.status === "confirmed") actual += amount; else reserved += amount;
+    }
+    return { currency: goal.budget.currency, limit: goal.budget.limit, reserved, actual, available: goal.budget.limit - reserved - actual };
+  }
+  metricSamples(goalId: string): MetricSample[] {
+    return (this.db.prepare("SELECT data FROM events WHERE kind='metric.sampled' AND json_extract(data,'$.goalId')=? ORDER BY seq").all(goalId) as Array<{ data: string }>).map((row) => JSON.parse(row.data) as MetricSample);
+  }
   events(): EventRecord[] { return (this.db.prepare("SELECT * FROM events ORDER BY seq").all() as Row[]).map(mapEvent); }
   goals(): GoalSnapshot[] { return (this.db.prepare("SELECT * FROM goals ORDER BY id").all() as Row[]).map(mapGoal); }
   schedules(): ScheduleSnapshot[] { return (this.db.prepare("SELECT * FROM schedule ORDER BY id").all() as Row[]).map(mapSchedule); }
@@ -392,6 +431,15 @@ export class SqliteLedger implements Ledger {
     if (parent.budget.currency !== goal.budget.currency || parent.budget.window !== goal.budget.window) throw new Error("child budget currency and window must match parent");
     const row = this.db.prepare("SELECT COALESCE(SUM(json_extract(budget,'$.limit')),0) total FROM goals WHERE parent_id=? AND id<>? AND budget IS NOT NULL").get(goal.parentId, goal.id) as { total: number };
     if (Number(row.total) + goal.budget.limit > parent.budget.limit) throw new Error("child budgets exceed parent budget");
+  }
+
+  #assertBudgetAvailable(action: ActionSnapshot): void {
+    const exposure = this.budgetExposure(action.agent, this.#now());
+    if (!exposure) return;
+    const payload = action.payload as Record<string, unknown>;
+    if (typeof payload.amount !== "number") return;
+    if (payload.currency !== exposure.currency) throw new Error("action currency does not match goal budget");
+    if (payload.amount > exposure.available) throw new Error("action exceeds available goal budget");
   }
 
   #assertEvidenceExists(evidence: number[]): void {
@@ -464,7 +512,13 @@ export class SqliteLedger implements Ledger {
         DROP TABLE wakes_v1;
         DROP TRIGGER IF EXISTS actions_valid_transition; ALTER TABLE actions RENAME TO actions_v1; ${createActions}
         INSERT INTO actions SELECT id,agent,kind,'legacy',payload,reason,evidence,gated,status,reconciled_at,external_ref,audit_advice,advice_acked FROM actions_v1;
-        DROP TABLE actions_v1; ${indexesAndTriggers} PRAGMA user_version=${SQLITE_SCHEMA_VERSION};`);
+        DROP TABLE actions_v1; ${indexesAndTriggers} INSERT INTO events_fts(events_fts) VALUES('rebuild'); PRAGMA user_version=${SQLITE_SCHEMA_VERSION};`);
+    });
+  }
+
+  #migrateV2(): void {
+    this.#transaction(() => {
+      this.db.exec(`${indexesAndTriggers} INSERT INTO events_fts(events_fts) VALUES('rebuild'); PRAGMA user_version=${SQLITE_SCHEMA_VERSION};`);
     });
   }
 
@@ -482,3 +536,10 @@ function mapSchedule(r: Row): ScheduleSnapshot { return {id:String(r.id),agent:S
 function mapWake(r: Row): WakeSnapshot { return {id:String(r.id),agent:String(r.agent),triggerRef:String(r.trigger_ref),status:String(r.status) as WakeSnapshot["status"],leaseUntil:r.lease_until===null?null:String(r.lease_until),attempt:Number(r.attempt),startedAt:r.started_at===null?null:String(r.started_at),endedAt:r.ended_at===null?null:String(r.ended_at),enqueuedSeq:Number(r.enqueued_seq),leaseToken:r.lease_token===null?null:String(r.lease_token),runnerPid:r.runner_pid===null?null:Number(r.runner_pid)}; }
 function mapMail(r: Row): MailSnapshot { return {id:String(r.id),to:String(r.to_agent),from:String(r.from_agent),level:String(r.level) as MailSnapshot["level"],body:JSON.parse(String(r.body)),readAt:r.read_at===null?null:String(r.read_at)}; }
 function mapAction(r: Row): ActionSnapshot { return {id:String(r.id),agent:String(r.agent),kind:String(r.kind),connector:String(r.connector),payload:JSON.parse(String(r.payload)),reason:String(r.reason),evidence:JSON.parse(String(r.evidence)),gated:Boolean(r.gated),status:String(r.status) as ActionStatus,reconciledAt:r.reconciled_at===null?null:String(r.reconciled_at),externalRef:r.external_ref===null?null:String(r.external_ref),auditAdvice:r.audit_advice===null?null:JSON.parse(String(r.audit_advice)),adviceAcked:Boolean(r.advice_acked)}; }
+function budgetWindowStart(window: "goal" | "day" | "month", at: string): string | null {
+  if (window === "goal") return null;
+  const date = new Date(at);
+  if (window === "day") date.setUTCHours(0, 0, 0, 0);
+  else { date.setUTCDate(1); date.setUTCHours(0, 0, 0, 0); }
+  return date.toISOString();
+}

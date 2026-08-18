@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
   capabilityFor,
+  evaluateMetric,
   type ActionSnapshot,
   type AuditAdvice,
   type Clock,
@@ -13,6 +14,9 @@ import {
   type GoalSnapshot,
   type JsonValue,
   type Ledger,
+  type MetricEvaluation,
+  type MetricProcessSpec,
+  type MetricSample,
   type RunLimits,
   type Runner,
   type RunnerHandle,
@@ -35,10 +39,14 @@ export class NoopWorkspaceManager implements WorkspaceManager {
 
 export class GitWorkspaceManager implements WorkspaceManager {
   readonly #worktrees: string;
+  #mergeTail: Promise<void> = Promise.resolve();
   constructor(readonly repository: string, readonly baseBranch = "main", worktrees?: string, readonly maxRetainedWorktrees = 32) {
     this.#worktrees = worktrees ?? join(repository, ".goah", "worktrees");
     mkdirSync(this.#worktrees, { recursive: true });
     git(repository, ["rev-parse", "--is-inside-work-tree"]);
+    const excludeValue = git(repository, ["rev-parse", "--git-path", "info/exclude"]);
+    const exclude = isAbsolute(excludeValue) ? excludeValue : join(repository, excludeValue);
+    if (!readFileSync(exclude, "utf8").split("\n").includes(".goah/")) appendFileSync(exclude, "\n.goah/\n");
   }
 
   async prepare(wake: WakeSnapshot): Promise<string> {
@@ -50,6 +58,15 @@ export class GitWorkspaceManager implements WorkspaceManager {
   }
 
   async merge(wake: WakeSnapshot): Promise<WorkspaceResult> {
+    const previous = this.#mergeTail;
+    let release!: () => void;
+    this.#mergeTail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try { return this.#merge(wake); }
+    finally { release(); }
+  }
+
+  #merge(wake: WakeSnapshot): WorkspaceResult {
     const path = this.#path(wake.id);
     const branch = this.#branch(wake.id);
     git(path, ["add", "-A"]);
@@ -102,7 +119,12 @@ export interface SupervisorOptions {
   allowExternalActions?: boolean;
   approvers?: string[];
   auditWriters?: string[];
+  heartbeatPolicies?: Array<{ agent: string; maxSilentMs: number; escalateTo: string; since?: string }>;
+  retryPolicy?: { maxAttempts: number; baseDelayMs: number };
+  profiles?: Array<{ agent: string; role: "child" | "ceo" | "verifier" | "audit" }>;
 }
+
+interface MetricCollectorRegistration { goalId: string; spec: MetricProcessSpec; intervalMs: number; nextAt: number }
 
 const defaultLimits: RunLimits = { maxTokens: 4_000, maxWallClockMs: 60_000, handoffReserveTokens: 500, handoffReserveWallClockMs: 5_000 };
 
@@ -114,6 +136,10 @@ export class Supervisor {
   readonly #approvers: Set<string>;
   readonly #auditWriters: Set<string>;
   readonly #connectors = new Map<string, ConnectorProcessSpec>();
+  readonly #metricCollectors = new Map<string, MetricCollectorRegistration>();
+  readonly #heartbeatPolicies: NonNullable<SupervisorOptions["heartbeatPolicies"]>;
+  readonly #retryPolicy: NonNullable<SupervisorOptions["retryPolicy"]>;
+  readonly #profiles: Map<string, "child" | "ceo" | "verifier" | "audit">;
 
   constructor(readonly ledger: Ledger, readonly runner: Runner, readonly clock: Clock, options: SupervisorOptions = {}) {
     this.#limits = options.limits ?? defaultLimits;
@@ -122,9 +148,15 @@ export class Supervisor {
     this.#allowExternalActions = options.allowExternalActions ?? false;
     this.#approvers = new Set(options.approvers ?? ["human", "ceo"]);
     this.#auditWriters = new Set(options.auditWriters ?? ["verifier", "audit"]);
+    this.#heartbeatPolicies = options.heartbeatPolicies ?? [];
+    this.#retryPolicy = options.retryPolicy ?? { maxAttempts: 0, baseDelayMs: 1_000 };
+    this.#profiles = new Map((options.profiles ?? []).map((profile) => [profile.agent, profile.role]));
   }
 
   registerConnector(connector: ConnectorProcessSpec): void { this.#connectors.set(connector.manifest.connector, connector); }
+  registerMetricCollector(goalId: string, spec: MetricProcessSpec, intervalMs = 60_000): void {
+    this.#metricCollectors.set(goalId, { goalId, spec, intervalMs, nextAt: 0 });
+  }
   createGoal(goal: GoalSnapshot, actor = "human"): void { this.ledger.putGoal(goal, actor); }
 
   planWake(agent: string, at: string, reason: string, setBy = agent): WakeSnapshot | null {
@@ -147,6 +179,9 @@ export class Supervisor {
 
   async tick(): Promise<WakeSnapshot | null> {
     for (const schedule of this.ledger.dueSchedules(this.#now())) this.#enqueueSchedule(schedule);
+    await this.#collectMetrics();
+    this.#scheduleMetricAndHeartbeatAlerts();
+    for (const mail of this.ledger.triggeringMail()) this.#enqueueTrigger(mail.to, `mail:${mail.id}`);
     const now = this.clock.now();
     const leaseToken = randomUUID();
     const wake = this.ledger.claimNextWake(now.toISOString(), new Date(now.getTime() + this.#leaseMs).toISOString(), leaseToken);
@@ -196,6 +231,16 @@ export class Supervisor {
     }
   }
 
+  async runAvailable(concurrency = 4): Promise<WakeSnapshot[]> {
+    const completed: WakeSnapshot[] = [];
+    while (true) {
+      const batch = await Promise.all(Array.from({ length: concurrency }, () => this.tick()));
+      const wakes = batch.filter((wake): wake is WakeSnapshot => wake !== null);
+      completed.push(...wakes);
+      if (wakes.length === 0) return completed;
+    }
+  }
+
   async submitAction(action: Omit<ActionSnapshot, "connector" | "gated" | "status" | "reconciledAt" | "externalRef">, connectorName: string): Promise<ActionSnapshot> {
     const connector = this.#connectors.get(connectorName);
     const capability = connector ? capabilityFor(connector.manifest, action.kind) : null;
@@ -226,6 +271,17 @@ export class Supervisor {
   }
 
   ackAuditAdvice(id: string, agent: string): ActionSnapshot { return this.ledger.ackAuditAdvice(id, agent); }
+
+  recordMetric(sample: MetricSample): MetricEvaluation {
+    const goal = this.ledger.goal(sample.goalId);
+    if (!goal) throw new Error(`metric goal not found: ${sample.goalId}`);
+    if (goal.metric.source !== sample.source) throw new Error("metric source does not match goal contract");
+    this.ledger.appendEvent({ ts: this.#now(), agent: "supervisor", kind: "metric.sampled", data: sample as unknown as JsonValue, wakeId: null });
+    const evaluation = evaluateMetric(goal.metric, this.ledger.metricSamples(goal.id), this.#now());
+    this.ledger.appendEvent({ ts: this.#now(), agent: "supervisor", kind: "metric.evaluated", data: evaluation as unknown as JsonValue, wakeId: null });
+    if (evaluation.shouldWakeOwner) this.#enqueueTrigger(goal.owner, `metric:${goal.id}:${sample.observedAt}`);
+    return evaluation;
+  }
 
   async reconcileAction(id: string): Promise<ActionSnapshot> {
     const action = this.#action(id);
@@ -261,26 +317,50 @@ export class Supervisor {
     const salvage = await this.#workspace.salvage(current);
     if (salvage) this.#workspaceEvent("workspace.salvaged", current, salvage);
     this.ledger.appendEvent({ ts: this.#now(), agent: current.agent, kind: "wake.abnormal_reason", data: { reason }, wakeId: current.id });
-    if (["leased", "running", "queued"].includes(current.status)) this.ledger.finishWake(current.id, "abnormal", this.#now());
+    if (["leased", "running", "queued"].includes(current.status)) {
+      this.ledger.finishWake(current.id, "abnormal", this.#now());
+      if (current.attempt < this.#retryPolicy.maxAttempts) {
+        const delay = this.#retryPolicy.baseDelayMs * 2 ** Math.max(0, current.attempt - 1);
+        const schedule: ScheduleSnapshot = { id: `retry:${current.id}`, agent: current.agent, nextWakeAt: new Date(this.clock.now().getTime() + delay).toISOString(), reason: `recovery:${current.id}`, setBy: "supervisor" };
+        this.ledger.putSchedule(schedule, "supervisor", current.id);
+      }
+    }
   }
 
   #enqueueSchedule(schedule: ScheduleSnapshot): WakeSnapshot {
-    const wake: WakeSnapshot = { id: randomUUID(), agent: schedule.agent, triggerRef: `${schedule.id}@${schedule.nextWakeAt}`, status: "queued", leaseUntil: null, attempt: 0, startedAt: null, endedAt: null, enqueuedSeq: 0, leaseToken: null, runnerPid: null };
+    return this.#enqueueTrigger(schedule.agent, `${schedule.id}@${schedule.nextWakeAt}`);
+  }
+
+  #enqueueTrigger(agent: string, triggerRef: string): WakeSnapshot {
+    const exact = this.ledger.wakeByTrigger(agent, triggerRef);
+    if (exact) return exact;
+    const queued = this.ledger.queuedWakeForAgent(agent);
+    if (queued) {
+      this.ledger.appendEvent({ ts: this.#now(), agent: "supervisor", kind: "wake.trigger_coalesced", data: { wakeId: queued.id, triggerRef }, wakeId: queued.id });
+      return queued;
+    }
+    const wake: WakeSnapshot = { id: randomUUID(), agent, triggerRef, status: "queued", leaseUntil: null, attempt: 0, startedAt: null, endedAt: null, enqueuedSeq: 0, leaseToken: null, runnerPid: null };
     const result = this.ledger.enqueueWake(wake, "supervisor");
     if (result.created) return this.#wake(wake.id);
-    const existing = this.ledger.wakeByTrigger(wake.agent, wake.triggerRef);
+    const existing = this.ledger.wakeByTrigger(agent, triggerRef);
     if (!existing) throw new Error("deduplicated wake is missing");
     return existing;
   }
 
   #loadContext(wake: WakeSnapshot): JsonValue {
-    const goals = this.ledger.goalsForOwner(wake.agent);
+    const role = this.#profiles.get(wake.agent) ?? "child";
+    const goals = role === "ceo" ? this.ledger.goals() : this.ledger.goalsForOwner(wake.agent);
     const mail = this.ledger.unreadMail(wake.agent);
     const auditAdvice = this.ledger.unackedAuditAdvice(wake.agent).map((action) => ({ actionId: action.id, advice: action.auditAdvice }));
     const handoff = this.ledger.lastEvent(wake.agent, "handoff.recorded");
-    const recoveryId = wake.triggerRef.startsWith("recovery:") ? wake.triggerRef.slice("recovery:".length) : null;
+    const recoveryId = wake.triggerRef.startsWith("recovery:")
+      ? wake.triggerRef.slice("recovery:".length)
+      : wake.triggerRef.startsWith("retry:") ? wake.triggerRef.slice("retry:".length).split("@")[0] : null;
     const recoveryEvents = recoveryId ? this.ledger.eventsForWake(recoveryId) : [];
-    return { goals, mail, auditAdvice, lastHandoff: handoff?.data ?? null, recoveryEvents } as unknown as JsonValue;
+    const teamHandoffs = role === "ceo"
+      ? [...this.ledger.eventsSince(0, ["handoff.recorded"])].reverse().filter((event, index, all) => all.findIndex((candidate) => candidate.agent === event.agent) === index).map((event) => ({ agent: event.agent, handoff: event.data }))
+      : [];
+    return { role, goals, mail, auditAdvice, lastHandoff: handoff?.data ?? null, teamHandoffs, recoveryEvents } as unknown as JsonValue;
   }
 
   #workspaceEvent(kind: string, wake: WakeSnapshot, data: object): void { this.ledger.appendEvent({ ts: this.#now(), agent: "supervisor", kind, data: data as JsonValue, wakeId: wake.id }); }
@@ -288,15 +368,64 @@ export class Supervisor {
   #wake(id: string): WakeSnapshot { const value = this.ledger.wake(id); if (!value) throw new Error(`wake not found: ${id}`); return value; }
   #action(id: string): ActionSnapshot { const value = this.ledger.action(id); if (!value) throw new Error(`action not found: ${id}`); return value; }
   #now(): string { return this.clock.now().toISOString(); }
+
+  async #collectMetrics(): Promise<void> {
+    const now = this.clock.now().getTime();
+    for (const registration of this.#metricCollectors.values()) {
+      if (registration.nextAt > now) continue;
+      registration.nextAt = now + registration.intervalMs;
+      const sample = await runJsonProcess<MetricSample>(registration.spec, { goalId: registration.goalId });
+      this.recordMetric({ ...sample, goalId: registration.goalId });
+    }
+  }
+
+  #scheduleMetricAndHeartbeatAlerts(): void {
+    for (const goal of this.ledger.goals()) {
+      const samples = this.ledger.metricSamples(goal.id);
+      const evaluation = evaluateMetric(goal.metric, samples, this.#now());
+      if (evaluation.shouldWakeOwner) this.#enqueueTrigger(goal.owner, `metric:${goal.id}:${evaluation.status}:${samples.at(-1)?.observedAt ?? "none"}`);
+    }
+    for (const policy of this.#heartbeatPolicies) {
+      const last = this.ledger.lastEvent(policy.agent, "handoff.recorded");
+      const baseline = last?.ts ?? policy.since ?? this.#now();
+      if (this.clock.now().getTime() - Date.parse(baseline) <= policy.maxSilentMs) continue;
+      const trigger = `heartbeat:${policy.agent}:${last?.seq ?? 0}`;
+      if (this.ledger.wakeByTrigger(policy.escalateTo, trigger)) continue;
+      this.ledger.appendEvent({ ts: this.#now(), agent: "supervisor", kind: "watchdog.heartbeat_violation", data: { agent: policy.agent, lastHandoffAt: last?.ts ?? null, escalateTo: policy.escalateTo }, wakeId: null });
+      this.#enqueueTrigger(policy.escalateTo, trigger);
+    }
+  }
+}
+
+export async function runSupervisorDaemon(supervisor: Supervisor, options: { pollMs?: number; concurrency?: number; signal?: AbortSignal; onError?: (error: unknown) => void } = {}): Promise<void> {
+  const pollMs = options.pollMs ?? 1_000;
+  await supervisor.recover();
+  while (!options.signal?.aborted) {
+    try { await supervisor.runAvailable(options.concurrency ?? 4); }
+    catch (error) { options.onError?.(error); }
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, pollMs);
+      options.signal?.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
+    });
+  }
+}
+
+export function renderDashboard(ledger: Ledger): string {
+  const rows = (values: unknown[]) => values.map((value) => `<tr><td><pre>${escapeHtml(JSON.stringify(value, null, 2))}</pre></td></tr>`).join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>goah status</title><style>body{font:14px ui-monospace;margin:32px;background:#101418;color:#dce3e4}section{margin:32px 0}pre{white-space:pre-wrap;border:1px solid #334;padding:12px}</style></head><body><h1>goah</h1><p>seq ${ledger.events().at(-1)?.seq ?? 0}</p><section><h2>Goals</h2><table>${rows(ledger.goals())}</table></section><section><h2>Wakes</h2><table>${rows(ledger.wakes())}</table></section><section><h2>Actions</h2><table>${rows(ledger.actions())}</table></section><section><h2>Mailbox</h2><table>${rows(ledger.mailbox())}</table></section></body></html>`;
 }
 
 async function runConnector<T>(spec: ConnectorProcessSpec, operation: "dispatch" | "query", action: ActionSnapshot): Promise<T> {
+  return runJsonProcess<T>(spec, { operation, action });
+}
+
+async function runJsonProcess<T>(spec: MetricProcessSpec | ConnectorProcessSpec, input: unknown): Promise<T> {
   const child = spawn(spec.command, spec.args, { detached: process.platform !== "win32", env: minimalEnvironment(spec.env), stdio: ["pipe", "pipe", "pipe"] });
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
   child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-  child.stdin.end(`${JSON.stringify({ operation, action })}\n`);
+  child.stdin.end(`${JSON.stringify(input)}\n`);
   const timeoutMs = spec.timeoutMs ?? 30_000;
   let timer: NodeJS.Timeout | undefined;
   const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
@@ -332,3 +461,6 @@ function minimalEnvironment(explicit: Record<string, string> = {}): NodeJS.Proce
   for (const name of ["PATH", "TMPDIR", "TMP", "TEMP", "SYSTEMROOT"]) if (process.env[name] !== undefined) env[name] = process.env[name];
   return { ...env, ...explicit };
 }
+function escapeHtml(value: string): string { return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"); }
+
+export * from "./verification.js";

@@ -1,0 +1,11 @@
+# Contracts
+
+All public packages evolve in lockstep under `CONTRACT_VERSION`. The current contract is experimental and additive evolution is preferred; SQLite changes require an explicit migration and future schema versions are rejected.
+
+- Ledger: append-only events plus five rebuildable projections; event and projection mutations are atomic.
+- Runner: process-isolated request/result protocol, lossless trace forwarding, fencing, hard limits, and structured handoff.
+- Load: bounded role-specific context; unacknowledged audit advice is mandatory and raw hidden reasoning is never reloaded.
+- Handoff: observations, results, next steps, optional blocker, mail, and next wake.
+- Connector: process-isolated capability manifest declaring idempotency, query behavior, retry policy, risk, and parameter constraints.
+
+Third-party ledgers should run `assertLedgerConformance()` from `@goah/testkit`.
