@@ -89,6 +89,7 @@ export interface ProcessRunnerOptions {
 }
 
 export function piWorkerPath(): string { return fileURLToPath(new URL("./pi-worker.js", import.meta.url)); }
+export function verificationWorkerPath(): string { return fileURLToPath(new URL("./verification-worker.js", import.meta.url)); }
 
 type WorkerRequest = Omit<RunRequest, "now" | "emit" | "rpc">;
 type WorkerMessage =

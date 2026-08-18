@@ -47,9 +47,10 @@ export async function runPiWorker(): Promise<void> {
     const workspace = request.workspacePath ? resolve(request.workspacePath) : undefined;
     const tools = createTools(workspace, (value) => { output = value; }, process.env.GOAH_PI_ALLOW_BASH === "true", rpc);
     const compactAt = Number(process.env.GOAH_PI_COMPACT_AT_TOKENS ?? Math.floor(request.limits.maxTokens * 0.6));
+    const suppliedPrompt = typeof request.context === "object" && request.context !== null && !Array.isArray(request.context) && typeof request.context.systemPrompt === "string" ? request.context.systemPrompt : undefined;
     const agent = new Agent({
       initialState: {
-        systemPrompt: `${process.env.GOAH_PI_SYSTEM_PROMPT ?? "You are a goal-oriented worker."}\nYou must finish by calling handoff exactly once. Treat the supplied context as authoritative.`,
+        systemPrompt: `${process.env.GOAH_PI_SYSTEM_PROMPT ?? suppliedPrompt ?? "You are a goal-oriented worker."}\nYou must finish by calling handoff exactly once. Treat the supplied context as authoritative.`,
         model,
         tools,
       },

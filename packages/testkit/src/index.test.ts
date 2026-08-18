@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { CONTRACT_VERSION, type GoalSnapshot, type WakeSnapshot } from "@goah/ledger-contract";
-import { piWorkerPath, ProcessRunner } from "@goah/runner-pi";
-import { calibrateVerificationThreshold, evaluateVerification, GitWorkspaceManager, renderDashboard, runSupervisorDaemon, Supervisor, VerificationPlane, type VerifierModel } from "@goah/supervisor";
+import { piWorkerPath, ProcessRunner, verificationWorkerPath } from "@goah/runner-pi";
+import { calibrateVerificationThreshold, evaluateVerification, GitWorkspaceManager, ProcessVerifierModel, renderDashboard, runSupervisorDaemon, Supervisor, VerificationPlane, type VerifierModel } from "@goah/supervisor";
 import { assertLedgerConformance, createMemoryLedger, fauxRunnerWorkerPath, MockConnector, SimulatedClock } from "./index.js";
 
 const metric = { source: "test", window: "1h", direction: "at_least" as const, target: 1, freshnessMs: 60_000, onMissing: "abnormal" as const, onStale: "wake_owner" as const };
@@ -310,6 +310,36 @@ test("bidirectional runner RPC applies child capabilities and rejects parent-onl
   denied.planWake("worker", clock.now().toISOString(), "denied");
   assert.equal((await denied.tick())?.status, "abnormal");
   assert.equal(ledger.goal("root")?.revision, 0);
+  ledger.close();
+});
+
+test("CEO role can create a child goal and receives its dedicated system prompt", async () => {
+  const clock = new SimulatedClock();
+  const ledger = createMemoryLedger({ clock });
+  const root = { id: "ceo-root", parentId: null, objective: "build organization", metric, target: 1, owner: "ceo", budget: null, phase: "active", revision: 0 } as const;
+  const child = { id: "child", parentId: "ceo-root", objective: "own metric", metric, target: 1, owner: "worker", budget: null, phase: "active", revision: 0 } as const;
+  const contextFile = join(mkdtempSync(join(tmpdir(), "goah-ceo-")), "context.json");
+  const supervisor = new Supervisor(ledger, fauxRunner([
+    { tokens: 1, rpc: { method: "goal.put", params: { goal: child } } },
+    { tokens: 1, handoff: { handoff: { observations: [], results: ["delegated"], nextSteps: [] }, mail: [], nextWakeAt: null } },
+  ], contextFile), clock, { profiles: [{ agent: "ceo", role: "ceo" }] });
+  ledger.putGoal(root, "human"); supervisor.planWake("ceo", clock.now().toISOString(), "replan");
+  assert.equal((await supervisor.tick())?.status, "done");
+  assert.equal(ledger.goal("child")?.owner, "worker");
+  assert.match((JSON.parse(readFileSync(contextFile, "utf8")) as { systemPrompt: string }).systemPrompt, /goal tree/i);
+  ledger.close();
+});
+
+test("process verifier model runs on official Pi core and writes advice", async () => {
+  const clock = new SimulatedClock();
+  const ledger = createMemoryLedger({ clock });
+  const supervisor = new Supervisor(ledger, fauxRunner([]), clock);
+  supervisor.createGoal(goal());
+  const evidence = ledger.appendEvent({ ts: clock.now().toISOString(), agent: "worker", kind: "fact", data: {}, wakeId: "verify-wake" });
+  ledger.requestAction({ id: "verify-action", agent: "worker", kind: "mock", connector: "mock", payload: {}, reason: "r", evidence: [evidence.seq], gated: false, status: "requested", reconciledAt: null, externalRef: null, auditAdvice: null, adviceAcked: false }, "worker", "verify-wake");
+  const model = new ProcessVerifierModel({ command: process.execPath, args: [verificationWorkerPath()], env: { GOAH_PI_PROVIDER: "faux", GOAH_PI_MODEL: "faux-verifier", GOAH_VERIFIER_FAUX_FINDINGS: JSON.stringify([{ actionId: "verify-action", body: { issue: "found" }, evidence: [evidence.seq], riskWeight: 3 }]) } });
+  await new VerificationPlane(ledger, supervisor, model).verifySession("verify-wake");
+  assert.equal(ledger.unackedAuditAdvice("worker").length, 1);
   ledger.close();
 });
 

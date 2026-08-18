@@ -26,6 +26,7 @@ import {
   type ScheduleSnapshot,
   type WakeSnapshot,
 } from "@goah/ledger-contract";
+import { defaultRolePrompt } from "./roles.js";
 
 export interface WorkspaceResult { status: "merged" | "merge_blocked"; commitSha: string; ref?: string }
 export interface SalvageResult { commitSha: string; ref: string }
@@ -365,7 +366,7 @@ export class Supervisor {
     const teamHandoffs = role === "ceo"
       ? [...this.ledger.eventsSince(0, ["handoff.recorded"])].reverse().filter((event, index, all) => all.findIndex((candidate) => candidate.agent === event.agent) === index).map((event) => ({ agent: event.agent, handoff: event.data }))
       : [];
-    return { role, goals, mail, auditAdvice, lastHandoff: handoff?.data ?? null, teamHandoffs, recoveryEvents } as unknown as JsonValue;
+    return { role, systemPrompt: this.#profiles.get(wake.agent)?.systemPrompt ?? defaultRolePrompt(role), goals, mail, auditAdvice, lastHandoff: handoff?.data ?? null, teamHandoffs, recoveryEvents } as unknown as JsonValue;
   }
 
   #workspaceEvent(kind: string, wake: WakeSnapshot, data: object): void { this.ledger.appendEvent({ ts: this.#now(), agent: "supervisor", kind, data: data as JsonValue, wakeId: wake.id }); }
@@ -501,3 +502,4 @@ function defaultCapabilities(role: AgentRole): AgentCapability[] {
 }
 
 export * from "./verification.js";
+export * from "./roles.js";

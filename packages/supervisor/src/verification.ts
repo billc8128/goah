@@ -1,4 +1,5 @@
 import type { ActionSnapshot, EventRecord, JsonValue, Ledger } from "@goah/ledger-contract";
+import { spawn } from "node:child_process";
 import type { Supervisor } from "./index.js";
 
 export interface VerificationFinding {
@@ -13,6 +14,30 @@ export interface VerifierModel {
   verifySession(input: { wakeId: string; handoff: JsonValue | null; trace: EventRecord[]; actions: ActionSnapshot[] }): Promise<VerificationResult>;
   blindAudit(facts: EventRecord[]): Promise<VerificationResult>;
   reasonAudit(input: { facts: EventRecord[]; reasons: Array<{ actionId: string; reason: string; evidence: number[] }> }): Promise<VerificationResult>;
+}
+
+export interface VerifierProcessSpec { command: string; args: string[]; env?: Record<string, string>; timeoutMs?: number }
+
+export class ProcessVerifierModel implements VerifierModel {
+  constructor(readonly spec: VerifierProcessSpec) {}
+  verifySession(input: { wakeId: string; handoff: JsonValue | null; trace: EventRecord[]; actions: ActionSnapshot[] }): Promise<VerificationResult> { return this.#call("verify_session", input); }
+  blindAudit(facts: EventRecord[]): Promise<VerificationResult> { return this.#call("blind_audit", { facts }); }
+  reasonAudit(input: { facts: EventRecord[]; reasons: Array<{ actionId: string; reason: string; evidence: number[] }> }): Promise<VerificationResult> { return this.#call("reason_audit", input); }
+
+  async #call(operation: string, input: unknown): Promise<VerificationResult> {
+    const env: NodeJS.ProcessEnv = {};
+    for (const name of ["PATH", "TMPDIR", "TMP", "TEMP", "SYSTEMROOT"]) if (process.env[name] !== undefined) env[name] = process.env[name];
+    const child = spawn(this.spec.command, this.spec.args, { detached: process.platform !== "win32", env: { ...env, ...this.spec.env }, stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = ""; let stderr = ""; let timedOut = false;
+    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    child.stdin.end(`${JSON.stringify({ operation, input })}\n`);
+    const timer = setTimeout(() => { timedOut = true; if (child.pid) { try { process.kill(process.platform === "win32" ? child.pid : -child.pid, "SIGKILL"); } catch {} } }, this.spec.timeoutMs ?? 60_000);
+    const code = await new Promise<number | null>((resolve, reject) => { child.once("error", reject); child.once("close", resolve); });
+    clearTimeout(timer);
+    if (code !== 0) throw new Error(timedOut ? "verifier process timed out" : stderr.trim() || `verifier exited ${code}`);
+    return JSON.parse(stdout) as VerificationResult;
+  }
 }
 
 export class VerificationPlane {
