@@ -1,0 +1,23 @@
+{
+  "name": "goah",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "npm run build && node --test packages/*/dist/*.test.js",
+    "example": "npm run build && node examples/minimal/dist/index.js"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
+}

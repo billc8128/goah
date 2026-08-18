@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>北辰 Harness</title>
+<style>
+  :root {
+    --paper: #EFF1F1;
+    --surface: #F7F8F8;
+    --well: #E4E8E8;
+    --ink: #141A1E;
+    --muted: #4E5A5E;
+    --faint: #7B8789;
+    --rule: #CBD3D4;
+    --brass: #8F6A16;
+    --brass-soft: #8F6A162A;
+    --moss: #3F6B4A;
+    --clay: #9A3B2C;
+    --serif: Georgia, 'Times New Roman', 'Songti SC', SimSun, serif;
+    --mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #11171B; --surface: #171F24; --well: #1D262C;
+      --ink: #DCE3E4; --muted: #9AA7AA; --faint: #6E7B7E; --rule: #2A343A;
+      --brass: #D9A94A; --brass-soft: #D9A94A26; --moss: #7FAE8C; --clay: #D07A66;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #11171B; --surface: #171F24; --well: #1D262C;
+    --ink: #DCE3E4; --muted: #9AA7AA; --faint: #6E7B7E; --rule: #2A343A;
+    --brass: #D9A94A; --brass-soft: #D9A94A26; --moss: #7FAE8C; --clay: #D07A66;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: var(--serif); font-size: 16px; line-height: 1.7;
+    margin: 0; padding: 0 24px 96px;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  header { padding: 56px 0 28px; border-bottom: 1px solid var(--rule); }
+  .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .14em; color: var(--brass); text-transform: uppercase; margin: 0 0 12px; }
+  h1 { font-size: 34px; line-height: 1.15; margin: 0 0 10px; font-weight: 600; }
+  .standfirst { font-size: 16px; color: var(--muted); margin: 0; max-width: 70ch; }
+  section { margin-top: 48px; }
+  h2 { font-size: 22px; margin: 0 0 14px; font-weight: 600; border-top: 1px solid var(--rule); padding-top: 16px; }
+  h2 .no { font-family: var(--mono); font-size: 13px; color: var(--brass); margin-right: 10px; }
+  h3 { font-size: 17px; margin: 26px 0 8px; font-weight: 600; }
+  p { margin: 0 0 12px; max-width: 78ch; }
+  ul, ol { margin: 0 0 12px; padding-left: 1.4em; max-width: 78ch; }
+  li { margin-bottom: 6px; }
+  li::marker { color: var(--brass); }
+  .note { font-size: 13.5px; color: var(--faint); }
+  pre {
+    background: var(--well); border: 1px solid var(--rule); border-radius: 3px;
+    padding: 14px 16px; overflow-x: auto;
+    font-family: var(--mono); font-size: 13px; line-height: 1.6;
+    margin: 12px 0 18px; color: var(--ink);
+  }
+  code { font-family: var(--mono); font-size: .88em; background: var(--well); padding: 1px 5px; border-radius: 3px; }
+  pre code { background: none; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 14px; line-height: 1.55; }
+  th {
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--faint); text-align: left; font-weight: 500;
+    border-bottom: 1px solid var(--ink); padding: 6px 14px 6px 0;
+  }
+  td { border-bottom: 1px solid var(--rule); padding: 9px 14px 9px 0; vertical-align: top; }
+  .table-scroll { overflow-x: auto; }
+  .mono-cell { font-family: var(--mono); font-size: 12.5px; }
+  .nowrap { white-space: nowrap; }
+  .rules { counter-reset: r; list-style: none; padding: 0; margin: 12px 0 18px; }
+  .rules li { counter-increment: r; position: relative; padding-left: 46px; margin-bottom: 10px; }
+  .rules li::before {
+    content: "R" counter(r); position: absolute; left: 0; top: 1px;
+    font-family: var(--mono); font-size: 13px; color: var(--brass); font-weight: 600;
+  }
+  figure { margin: 20px 0; }
+  figure svg { max-width: 100%; height: auto; display: block; }
+  figcaption { font-size: 13px; color: var(--faint); margin-top: 8px; }
+  .diagram-frame { background: var(--surface); border: 1px solid var(--rule); border-radius: 3px; padding: 20px 16px; overflow-x: auto; }
+  .qlist { counter-reset: q; list-style: none; padding-left: 0; }
+  .qlist li { counter-increment: q; padding-left: 2.6em; position: relative; margin-bottom: 10px; }
+  .qlist li::before {
+    content: "Q" counter(q); position: absolute; left: 0; top: 1px;
+    font-family: var(--mono); font-size: 12.5px; color: var(--brass); font-weight: 600;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">技术规划 v0.10 · 2026-08-18</p>
+  <h1>北辰 Harness</h1>
+  <p class="standfirst">长期运行、对可度量大目标负责的 multi-agent 系统。用户给一个目标(如"收入 $500k/天"),系统自主拆解、执行、检查、修正;仅危险动作与预算越线时请求人工。</p>
+</header>
+
+<section>
+  <h2><span class="no">1</span>背景与问题</h2>
+  <p>现有 agent 产品(Claude Code、Manus、AutoGPT 等)在部署与交互形态上各不相同,但生命周期同构,都是 <strong>session 级</strong>:人交来一个任务,agent 带工具自主循环直到做完,人验收,状态活在上下文里,运行结束即终结。编排框架(LangGraph、CrewAI 等)提供了跨步骤的结构,但拓扑由开发者预先写死,运行时不能自主 re-plan。对照"对一个指标长期负责"所需的能力:</p>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>所需能力</th><th>现状</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap">状态在进程外持久</td><td>上下文即状态:session 结束即丢,或依赖压缩摘要(有损、不可追问)</td></tr>
+      <tr><td class="nowrap">自主唤醒与调度</td><td>每次运行由人或外部 cron 发起;agent 不会自己定闹钟、不会被指标叫醒</td></tr>
+      <tr><td class="nowrap">独立纠错</td><td>反思由同一个上下文里的自己做;无角色读全量事实对账</td></tr>
+      <tr><td class="nowrap">目标 / 指标 / 预算语义</td><td>目标是一个 prompt 字符串;无分解结构、无达成判定、无预算约束</td></tr>
+      <tr><td class="nowrap">无人值守的安全边界</td><td>靠人盯着逐动作确认(permission prompt),或干脆全放开</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">dsh(2026 开源)是最接近的先例:账本、整值事件、崩溃语义可直接借用(§9);但其 authority wall 有意禁止无人值守恢复自主,且无目标分解、常驻调度、独立验证——差距在定位,不在工程。</p>
+  <p>长期无人值守要解决五个问题(后文原则、模块均回指这五项):</p>
+  <ul>
+    <li><strong>A 上下文增长:</strong>持续 session 的上下文随时长线性膨胀,模型退化;这是长跑不成立的首要工程原因。</li>
+    <li><strong>B 漂移:</strong>错误归因被写进记忆当作事实,后续决策基于它,错误复利;agent 反思自己的工作时倾向自我辩护,纠不回来。</li>
+    <li><strong>C 崩溃与副作用:</strong>进程随时可能死;外部动作(花钱)不可重放,恢复时可能重复执行。</li>
+    <li><strong>D 安全边界:</strong>无人值守 + 真实预算下,靠 prompt 约束模型不成立,约束必须机械执行。</li>
+    <li><strong>E 人工带宽:</strong>人不能成为调度器或逐事审批者,否则退化回任务型;人工介入目标 ≤ 每日一次看板 + 危险动作审批。</li>
+  </ul>
+  <p class="note">非目标:通用对话助手;实时人机协作;一次性任务执行;模型能力本身的提升。</p>
+</section>
+
+<section>
+  <h2><span class="no">2</span>设计原则</h2>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>原则</th><th>内容</th><th>针对</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap">P1 账本为本体</td><td>系统的本体是账本,agent 是短命计算:每次唤醒 = 装载 → 干活 → 写账 → 进程死亡。上下文每轮从状态重建,天然有界;崩溃恢复 = 重放账本,与正常唤醒同一条路径。</td><td class="mono-cell nowrap">A · C</td></tr>
+      <tr><td class="nowrap">P2 目标单向下达</td><td>任何回路不能改写自己的目标,目标只能由外层(最终是人类)修改。agent 的自主性限于方法层,不含目的层——系统无法用漂移后的目标为自己辩护。</td><td class="mono-cell nowrap">B</td></tr>
+      <tr><td class="nowrap">P3 验证独立于执行</td><td>验证角色不在指挥链中,输入与执行者隔离(审计禁读一切自述)。验证产出落账并强制进入被审计者下次装载,不依赖对方自觉。</td><td class="mono-cell nowrap">B</td></tr>
+      <tr><td class="nowrap">P4 判断归模型,效力归状态机</td><td>开放式判断(拆解、选方法、归因、审计)由模型做;判断的后果(拒绝动作、硬停、拒绝退出)由确定性代码执行。能被推理绕过的护栏等于没有。</td><td class="mono-cell nowrap">D</td></tr>
+      <tr><td class="nowrap">P5 事前闸门最小化</td><td>只拦事后纠正不回来的(钱、不可逆),其余默认放行、交给事后验证层。审批面越大,系统越退化为人工工作流。</td><td class="mono-cell nowrap">D · E</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section>
+  <h2><span class="no">3</span>核心规则</h2>
+  <p>以下规则由 harness 代码强制,不依赖 prompt:</p>
+  <ol class="rules">
+    <li>所有持久状态在账本(SQLite)。agent 进程无状态:唤醒时装载,退出前写账,进程销毁。重启系统 = 重放账本。</li>
+    <li>事件只追加。历史压缩只做位置替换,保留 <code>source_seqs</code> 指回原事件,不删除。</li>
+    <li>目标节点只能由父层修改(根节点 = 人类)。每个目标节点必须有可判定的达成条件和独占指标。</li>
+    <li>每个动作必须携带 reason 与证据指针(<code>evidence[seq]</code>),schema 强制非空。验证角色对动作补充 <code>audit_advice</code>;未确认的 advice 由 supervisor 强制注入该 agent 的下次装载,不依赖其主动查看。</li>
+    <li>危险清单内的动作(超预算线 / 不可逆)挂起待审批;清单外默认放行。清单修改需人工批准。</li>
+    <li>每个 agent 有心跳契约(最长静默时间)。违约时 supervisor 强制唤醒 CEO;连续违约升级人类。</li>
+  </ol>
+</section>
+
+<section>
+  <h2><span class="no">4</span>总体架构</h2>
+  <p>系统 = 一本账 + 一组时间常数不同的控制回路 + 一个独立验证平面 + 一个无模型的常驻核心。所有 agent 共用同一个执行原语(唤醒循环,§6.1),区别只在角色 prompt、装载内容和写权限。</p>
+  <h3>4.1 角色</h3>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>角色</th><th>形态</th><th>职责</th><th>写权限</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap">supervisor</td><td class="nowrap">常驻进程,无模型调用</td><td>扫调度表、孵化 agent 进程、序列化全部写账、执行闸门、采集外部指标、看门狗、持有全部外部 API 密钥并代执行动作</td><td>所有表(系统唯一写入方)</td></tr>
+      <tr><td class="nowrap">CEO agent</td><td class="nowrap">短命唤醒</td><td>拆解目标树、分配预算、周期 re-plan、审批预算类挂起动作</td><td>goals(子节点)、mailbox、自己的笔记</td></tr>
+      <tr><td class="nowrap">子 agent</td><td class="nowrap">短命唤醒</td><td>独占一个子目标 + 一个指标,自选方法执行</td><td>提交 actions、自己的 schedule、自己的笔记</td></tr>
+      <tr><td class="nowrap">verifier</td><td class="nowrap">短命唤醒</td><td>单 session 核查:交接自述 vs trace 事实</td><td>actions.audit_advice、违规事件</td></tr>
+      <tr><td class="nowrap">全局审计</td><td class="nowrap">短命唤醒</td><td>跨 agent 归因核查;禁止读取任何 agent 的交接与自述</td><td>actions.audit_advice、mailbox(可直达人类)</td></tr>
+      <tr><td class="nowrap">人类</td><td>—</td><td>定根目标与北极星指标、审批不可逆动作、维护危险清单、定期看板</td><td>goals(根)、危险清单、审批队列</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <figure>
+    <div class="diagram-frame">
+    <svg viewBox="0 0 980 520" role="img" aria-label="嵌套控制回路:人类、CEO、子 agent、单次唤醒四层,目标向内下达,证据向外上报,审计独立读账" style="min-width:800px" font-family="ui-monospace, Menlo, monospace" font-size="13">
+      <defs>
+        <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+        <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--brass)"/></marker>
+      </defs>
+      <g fill="none" stroke="currentColor" stroke-width="1.3">
+        <rect x="150" y="36" width="400" height="56" rx="2"/>
+        <rect x="150" y="132" width="400" height="56" rx="2"/>
+        <rect x="150" y="228" width="400" height="56" rx="2"/>
+        <rect x="150" y="324" width="400" height="56" rx="2" stroke-dasharray="5 4"/>
+        <rect x="150" y="446" width="730" height="48" rx="2" stroke-width="1.7"/>
+      </g>
+      <g fill="none" stroke="var(--brass)" stroke-width="1.3">
+        <rect x="690" y="150" width="250" height="170" rx="2"/>
+      </g>
+      <g fill="currentColor">
+        <text x="350" y="60" text-anchor="middle" font-size="14">人类</text>
+        <text x="350" y="80" text-anchor="middle" font-size="11" fill="var(--faint)">北极星指标 · 不可逆动作审批</text>
+        <text x="350" y="156" text-anchor="middle" font-size="14">CEO agent</text>
+        <text x="350" y="176" text-anchor="middle" font-size="11" fill="var(--faint)">目标树 · 预算 · re-plan</text>
+        <text x="350" y="252" text-anchor="middle" font-size="14">子 agent × N</text>
+        <text x="350" y="272" text-anchor="middle" font-size="11" fill="var(--faint)">每个独占一个子目标与指标</text>
+        <text x="350" y="348" text-anchor="middle" font-size="14">单次唤醒(进程内)</text>
+        <text x="350" y="368" text-anchor="middle" font-size="11" fill="var(--faint)">模型推理 + 工具调用</text>
+        <text x="515" y="474" text-anchor="middle" font-size="14">账本:events + goals + mailbox + schedule + actions</text>
+      </g>
+      <g fill="var(--brass)">
+        <text x="815" y="182" text-anchor="middle" font-size="14">verifier / 全局审计</text>
+        <text x="815" y="210" text-anchor="middle" font-size="11">verifier:单 session,自述 vs trace</text>
+        <text x="815" y="234" text-anchor="middle" font-size="11">审计:跨 agent,禁读自述</text>
+        <text x="815" y="262" text-anchor="middle" font-size="11">写权限仅 audit_advice</text>
+        <text x="815" y="286" text-anchor="middle" font-size="11">审计可直接告警人类</text>
+      </g>
+      <g fill="var(--faint)" font-size="11.5" text-anchor="end">
+        <text x="134" y="68">周 – 月</text>
+        <text x="134" y="164">周</text>
+        <text x="134" y="260">小时 – 天</text>
+        <text x="134" y="356">分钟</text>
+      </g>
+      <g stroke="currentColor" stroke-width="1.3" fill="none">
+        <line x1="205" y1="92" x2="205" y2="130" marker-end="url(#a1)"/>
+        <line x1="205" y1="188" x2="205" y2="226" marker-end="url(#a1)"/>
+        <line x1="205" y1="284" x2="205" y2="322" marker-end="url(#a1)"/>
+        <line x1="495" y1="226" x2="495" y2="190" marker-end="url(#a1)"/>
+        <line x1="495" y1="130" x2="495" y2="94" marker-end="url(#a1)"/>
+        <line x1="495" y1="322" x2="495" y2="286" marker-end="url(#a1)"/>
+      </g>
+      <g fill="var(--faint)" font-size="11">
+        <text x="215" y="116" text-anchor="start">目标 + 指标 + 预算</text>
+        <text x="215" y="212" text-anchor="start">子目标 + 指标 + 预算</text>
+        <text x="215" y="308" text-anchor="start">本轮任务</text>
+        <text x="485" y="116" text-anchor="end">证据 + 升级</text>
+        <text x="485" y="212" text-anchor="end">证据 + 阻塞</text>
+        <text x="485" y="308" text-anchor="end">结果</text>
+      </g>
+      <g stroke="currentColor" stroke-width="1.1" fill="none" stroke-dasharray="3 3">
+        <line x1="550" y1="64" x2="600" y2="64"/>
+        <line x1="550" y1="160" x2="600" y2="160"/>
+        <line x1="550" y1="256" x2="600" y2="256"/>
+        <line x1="550" y1="352" x2="600" y2="352"/>
+        <line x1="600" y1="64" x2="600" y2="444"/>
+      </g>
+      <g stroke="currentColor" stroke-width="1.1" fill="none">
+        <line x1="600" y1="430" x2="600" y2="444" marker-end="url(#a1)"/>
+      </g>
+      <g stroke="var(--brass)" stroke-width="1.3" fill="none">
+        <line x1="860" y1="444" x2="860" y2="322" marker-end="url(#a2)"/>
+        <line x1="688" y1="290" x2="554" y2="290" marker-end="url(#a2)"/>
+      </g>
+      <g fill="var(--brass)" font-size="11">
+        <text x="868" y="392" text-anchor="start">只读</text>
+        <text x="648" y="282" text-anchor="middle">audit_advice</text>
+      </g>
+      <g fill="none" stroke="var(--brass)" stroke-width="1.3">
+        <rect x="150" y="396" width="400" height="34" rx="2"/>
+      </g>
+      <text x="350" y="418" fill="var(--brass)" font-size="12.5" text-anchor="middle">R3:任何回路不能改写自己的目标</text>
+    </svg>
+    </div>
+    <figcaption>四层控制回路,时间常数逐层放大。目标向内下达(R3),证据向外上报,全部事实落账。验证角色不在指挥链中,只读账本,写权限仅 audit_advice。</figcaption>
+  </figure>
+  <h3>4.2 部署视图:进程与通信</h3>
+  <p>常驻进程只有 supervisor 一个;agent runner 每次唤醒起一个、退出即销毁;面板只读。<strong>不引入消息队列、缓存、独立调度器</strong>——调度表与信箱就是 SQLite 表,轮询足够,中间件只会多出必须保活的组件。</p>
+  <figure>
+    <div class="diagram-frame">
+    <svg viewBox="0 0 980 560" role="img" aria-label="部署视图:supervisor 六个内部服务、短命 agent runner 进程、只读面板与账本之间的通信关系" style="min-width:820px" font-family="ui-monospace, Menlo, monospace" font-size="12.5">
+      <defs>
+        <marker id="e1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+        <marker id="e2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--brass)"/></marker>
+      </defs>
+
+      <!-- supervisor box -->
+      <g fill="none" stroke="currentColor" stroke-width="1.6"><rect x="24" y="40" width="440" height="330" rx="3"/></g>
+      <text x="44" y="64" fill="currentColor" font-size="13.5">supervisor(常驻 · 无模型调用)</text>
+      <g fill="none" stroke="currentColor" stroke-width="1.1">
+        <rect x="44" y="84" width="196" height="52" rx="2"/>
+        <rect x="252" y="84" width="196" height="52" rx="2"/>
+        <rect x="44" y="150" width="196" height="52" rx="2"/>
+        <rect x="252" y="150" width="196" height="52" rx="2"/>
+        <rect x="44" y="216" width="196" height="52" rx="2"/>
+        <rect x="252" y="216" width="196" height="52" rx="2"/>
+      </g>
+      <g fill="currentColor" text-anchor="middle" font-size="12">
+        <text x="142" y="106">调度器</text><text x="142" y="124" font-size="10" fill="var(--faint)">扫 schedule / 信箱 / 指标</text>
+        <text x="350" y="106">进程管理器</text><text x="350" y="124" font-size="10" fill="var(--faint)">孵化 · 超时杀 · 退出码</text>
+        <text x="142" y="172">账本写入器</text><text x="142" y="190" font-size="10" fill="var(--faint)">唯一写口 · 串行 · 分配 seq</text>
+        <text x="350" y="172">闸门</text><text x="350" y="190" font-size="10" fill="var(--faint)">危险清单 · R4 · 审批队列</text>
+        <text x="142" y="238">动作执行器</text><text x="142" y="256" font-size="10" fill="var(--faint)">持密钥 · 幂等 · unknown</text>
+        <text x="350" y="238">看门狗 / 指标采集</text><text x="350" y="256" font-size="10" fill="var(--faint)">心跳契约 · 拉外部指标</text>
+      </g>
+      <g fill="none" stroke="var(--brass)" stroke-width="1.2"><rect x="44" y="290" width="404" height="56" rx="2" stroke-dasharray="5 4"/></g>
+      <text x="246" y="312" fill="var(--brass)" text-anchor="middle" font-size="12">审批队列 / 通知</text>
+      <text x="246" y="332" fill="var(--brass)" text-anchor="middle" font-size="10">L3 待批 · 紧急告警 → 人类</text>
+
+      <!-- ledger -->
+      <g fill="none" stroke="currentColor" stroke-width="1.7"><rect x="24" y="418" width="440" height="60" rx="3"/></g>
+      <text x="244" y="444" fill="currentColor" text-anchor="middle" font-size="13">账本 SQLite(WAL)+ workspace(git)</text>
+      <text x="244" y="464" fill="var(--faint)" text-anchor="middle" font-size="10">events · goals · schedule · mailbox · actions · FTS5</text>
+      <g stroke="currentColor" stroke-width="1.4" fill="none">
+        <line x1="142" y1="372" x2="142" y2="416" marker-end="url(#e1)"/>
+      </g>
+      <text x="152" y="398" fill="var(--faint)" font-size="10" text-anchor="start">唯一写入方</text>
+
+      <!-- agent runner -->
+      <g fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="6 4"><rect x="560" y="70" width="390" height="190" rx="3"/></g>
+      <text x="580" y="94" fill="currentColor" font-size="13.5">agent runner(短命 · 每唤醒一进程)</text>
+      <text x="580" y="114" fill="var(--faint)" font-size="10.5">pi-agent-core + 角色工具集 + compaction</text>
+      <g fill="none" stroke="currentColor" stroke-width="1"><rect x="580" y="130" width="350" height="46" rx="2"/><rect x="580" y="190" width="350" height="46" rx="2"/></g>
+      <text x="755" y="152" fill="currentColor" text-anchor="middle" font-size="12">模型循环 + 工具调用</text>
+      <text x="755" y="168" fill="var(--faint)" text-anchor="middle" font-size="10">L0 工具本地执行(读数据 · 分析 · 写黑板)</text>
+      <text x="755" y="212" fill="currentColor" text-anchor="middle" font-size="12">submit_action / 按需读 / 追加事件</text>
+      <text x="755" y="228" fill="var(--faint)" text-anchor="middle" font-size="10">经 IPC,agent 进程不碰 SQLite,无外部密钥</text>
+
+      <!-- panel -->
+      <g fill="none" stroke="currentColor" stroke-width="1.3"><rect x="560" y="418" width="390" height="60" rx="3"/></g>
+      <text x="755" y="444" fill="currentColor" text-anchor="middle" font-size="13">面板(只读)</text>
+      <text x="755" y="464" fill="var(--faint)" text-anchor="middle" font-size="10">直读事实与指标,不经 agent 转述</text>
+      <g stroke="currentColor" stroke-width="1.2" fill="none" stroke-dasharray="4 3">
+        <line x1="558" y1="448" x2="468" y2="448" marker-end="url(#e1)"/>
+      </g>
+
+      <!-- comms -->
+      <g stroke="currentColor" stroke-width="1.4" fill="none">
+        <line x1="466" y1="118" x2="558" y2="118" marker-end="url(#e1)"/>
+        <line x1="558" y1="155" x2="466" y2="155" marker-end="url(#e1)"/>
+        <line x1="558" y1="213" x2="466" y2="213" marker-end="url(#e1)" marker-start="url(#e1)"/>
+      </g>
+      <g fill="currentColor" font-size="11" text-anchor="middle">
+        <text x="512" y="110">①</text>
+        <text x="512" y="147">②</text>
+        <text x="512" y="205">③</text>
+      </g>
+
+      <!-- external -->
+      <g fill="none" stroke="var(--brass)" stroke-width="1.3"><rect x="560" y="300" width="390" height="56" rx="3"/></g>
+      <text x="755" y="322" fill="var(--brass)" text-anchor="middle" font-size="12.5">外部世界</text>
+      <text x="755" y="340" fill="var(--brass)" text-anchor="middle" font-size="10">投放 / CMS / 支付 · 受限子账号 · 平台侧限额</text>
+      <g stroke="var(--brass)" stroke-width="1.4" fill="none">
+        <line x1="466" y1="316" x2="556" y2="326" marker-end="url(#e2)"/>
+      </g>
+      <text x="512" y="306" fill="var(--brass)" font-size="11" text-anchor="middle">④</text>
+
+      <!-- legend -->
+      <g fill="var(--faint)" font-size="10.5">
+        <text x="24" y="508">① spawn:角色 prompt + 工具集 + 装载上下文</text>
+        <text x="24" y="528">② 交接与事件流:stdout,schema 校验后入账</text>
+        <text x="512" y="508">③ RPC:submit_action · 按需读账本 · 追加事件</text>
+        <text x="512" y="528">④ 动作执行器持密钥,代 agent 调用外部 API</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption>agent 进程不持有数据库连接与外部密钥:读写账本经 ③ RPC、触碰外部世界经 ④ 由 supervisor 代执行。因此账本恒为单写者,闸门与权限检查无处可绕;agent 崩溃不影响账本一致性,supervisor 崩溃则全系统停摆(唯一需保活组件)。</figcaption>
+  </figure>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>supervisor 内部服务</th><th>职责</th><th>触发</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap">调度器</td><td>扫 schedule 到期项、未读 decision/emergency 信件、指标越线;经 wakes 表以事务领取(lease_until),同一 agent 并发 = 1,崩溃后过期 lease 可安全重领</td><td>轮询(秒级)</td></tr>
+      <tr><td class="nowrap">进程管理器</td><td>拼 spawn 配置(角色 prompt + 工具集 + 装载上下文)、起 runner、超时终止、收退出码与交接</td><td>调度器</td></tr>
+      <tr><td class="nowrap">账本写入器</td><td>系统唯一写口:校验 schema 与写权限、分配 seq、串行落盘</td><td>RPC / 交接回收</td></tr>
+      <tr><td class="nowrap">闸门</td><td>危险清单判定、R4(reason/evidence 非空)检查、挂起与审批队列管理</td><td>submit_action</td></tr>
+      <tr><td class="nowrap">动作执行器</td><td>持全部外部密钥,按 scope 下发给 connector 受限子进程代执行(§8.2);幂等键去重;崩溃后 unknown 对账</td><td>闸门放行 / 人工批复</td></tr>
+      <tr><td class="nowrap">看门狗 / 指标采集</td><td>心跳契约检查、拉取外部指标写入账本、越线触发唤醒</td><td>定时</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">其余组件均非必需常驻:面板可退化为定时生成的静态页;审批入口可复用面板 + 推送通知;指标采集不单列进程。</p>
+
+  <h3>4.3 模块必要性</h3>
+  <p>每个模块对应一个具体失败模式;"删掉会怎样"是该模块的存在证明:</p>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>模块</th><th>作用</th><th>删掉会怎样</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap">目标树 + 子 agent 分层</td><td>子目标边界 = 上下文边界。每个子 agent 独占一个子目标和一个指标,装载只带自己命名空间的结论</td><td>单 agent 必须装下所有领域的状态,装载无法压在几千 token,问题 A 从正门回来;指标告警没有唯一责任人;一个领域的失败污染全局上下文</td></tr>
+      <tr><td class="nowrap">CEO 与子 agent 分开</td><td>全局(树、预算、跨子目标取舍)与局部(单指标的方法选择)是两种时间常数和两种上下文</td><td>同一个 agent 又管拆解又管执行,装载必须同时装下全局和细节;re-plan 和日常执行互相打断</td></tr>
+      <tr><td class="nowrap">supervisor(无模型)</td><td>调度、闸门、密钥、写账序列化的唯一承载</td><td>闸门若含模型则可被推理绕过(违反 P4);密钥若发给 agent 则清单可被绕开;无常驻方则没人执行"到点唤醒"和看门狗</td></tr>
+      <tr><td class="nowrap">actions 记录义务 + 审计批注</td><td>每个动作携带 reason 与 evidence[seq];verifier 在动作上补充 audit_advice,未确认者强制进下次装载</td><td>动作只剩 payload,判断不可追问、不可证伪,验证层失去原材料;审计意见无处落地,送达靠 agent 自觉</td></tr>
+      <tr><td class="nowrap">verifier(session 级)</td><td>拿 trace 对照交接自述,高频、便宜</td><td>自述与实际的偏差("实验正向"/样本量 30)无人发现,污染的交接直接成为下轮任务清单</td></tr>
+      <tr><td class="nowrap">全局审计(周期级)</td><td>跨 agent 独立重建归因,禁读自述</td><td>单 session 看不见的混杂因素(别的 agent 记的大促事件)无人核对;执行者的错误归因无对手方,问题 B 复利</td></tr>
+      <tr><td class="nowrap">mailbox + schedule</td><td>短命进程间的异步通讯与"主动性"的物理载体(自约唤醒、告警唤醒)</td><td>短命进程无法同步通话;无 schedule 则唤醒只能靠外部 cron,agent 失去自定节奏;消息不落地则父进程重启期间丢信</td></tr>
+      <tr><td class="nowrap">危险清单 + 幂等网关</td><td>不可逆动作与钱的事前闸门;崩溃后 unknown 对账</td><td>不可逆错误无法由验证层挽回;崩溃重试导致双花(问题 C)</td></tr>
+      <tr><td class="nowrap">只读面板</td><td>人直读事实与指标,不经 agent 转述</td><td>人的检查退化为读 agent 写的日报,叙事与数字背离时无从发现(问题 E 的看板一环失效)</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section>
+  <h2><span class="no">5</span>状态模型</h2>
+  <p>单写者 SQLite(WAL)。agent 不直接写库,写请求经 supervisor 序列化。大块产物(报告、素材、代码)放 workspace 文件树,表里只存索引。</p>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>表</th><th>可变性</th><th>字段</th></tr></thead>
+    <tbody>
+      <tr><td class="mono-cell nowrap">events</td><td class="nowrap">只追加</td><td class="mono-cell">seq · ts · agent · kind · data(JSON,整值快照) · wake_id</td></tr>
+      <tr><td class="mono-cell nowrap">goals</td><td class="nowrap">仅父层,CAS(revision)</td><td class="mono-cell">id · parent_id · objective · metric · target · owner · budget · phase · revision</td></tr>
+      <tr><td class="mono-cell nowrap">schedule</td><td class="nowrap">本人 + supervisor</td><td class="mono-cell">id · agent · next_wake_at · reason · set_by</td></tr>
+      <tr><td class="mono-cell nowrap">wakes</td><td class="nowrap">仅 supervisor</td><td class="mono-cell">id · agent · trigger_ref · status(queued|leased|running|done|abnormal|merge_blocked) · lease_until · attempt · started_at · ended_at</td></tr>
+      <tr><td class="mono-cell nowrap">mailbox</td><td class="nowrap">追加 + 已读标记</td><td class="mono-cell">id · to · from · level(fyi|decision|emergency) · body · read_at</td></tr>
+      <tr><td class="mono-cell nowrap">actions</td><td class="nowrap">状态机;audit_advice 仅验证角色写</td><td class="mono-cell">id(幂等键) · agent · kind · payload · reason · evidence[seq] · gated(bool) · status(requested|approved|dispatching|confirmed|failed|unknown) · reconciled_at? · external_ref · audit_advice · advice_acked(bool)</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <ul class="note">
+    <li>整值事件:状态变更事件携带完整变更后快照,重放为后写覆盖(借用 dsh)。<strong>events 是唯一事实源</strong>,goals / wakes / actions / schedule / mailbox 均为可重建投影;supervisor 在同一 SQLite 事务内追加事件并更新投影,崩溃恢复 = 重放(R1 的承诺由此成立,而非仅审计日志)。</li>
+    <li>长期记忆是 workspace 里的笔记文件,由 agent 在写账阶段自行整理,框架不规定其内部结构,不设独立的整理角色;装载时笔记随交接一起进入上下文。agent 退出后,supervisor 将该轮 workspace 变更提交为一个 git commit(以 wake_id 标记)——笔记 diff 由此派生,不靠 agent 自报。每次 wake 在独立 git worktree 中工作,正常交接后由 supervisor 串行合并入主干(合并前 rebase);冲突时该 wake 标 <code>merge_blocked</code>,不自动覆盖,交原 agent 重做或升级处置。abnormal wake 的 worktree 不合并,原样留作取证。同一 agent 同时最多一个 wake(wakes 表保证);共享黑板的写入经 supervisor 代写。</li>
+    <li>未确认的 audit_advice 强制进入下次装载(带证据指针),防止同一错误被重新推导;agent 确认(advice_acked)后转为按需查询。</li>
+    <li>goals.budget 可选:并非所有目标涉及钱,钱的硬闸本体在危险清单与 connector 参数约束(§8)。配置了预算的目标额外获得:超线挂起、耗尽上报、子目标分配总和 ≤ 父层的检查;额度按 <code>approved</code> 预占、<code>confirmed</code> 转实际、<code>failed</code> 释放、<code>unknown</code> 期间持续占用——防止多个已批动作并发超支。</li>
+    <li>单次唤醒默认设 token 与 wall-clock 上限(按角色可配置):超限强制交接、经 next_steps 链式唤醒续作。不可分段的超长单 session(深度调试、大重构,10h+ 量级)靠 runner 内 mid-turn compaction 支撑——压缩只改发给模型的视图,不改账本。</li>
+    <li>goals.metric 是轻量契约:数据源 · 统计窗口 · 方向 · 目标值 · freshness(数据多旧算失效),达成判定可机械执行。独占指标 = 责任归属(告警有唯一响应者),不是因果独占。可选字段:sustain_for(持续达标时长)、guardrails(主指标改善时不得突破的保护指标)。</li>
+    <li>events / 交接 / workspace 笔记上建 FTS5 索引(SQLite 内建),供 verifier 与全局审计检索。runner 对账本的唯一职责是无损吐事件;事件入账后,runner 本地 session 文件为可丢弃的中间产物——账本是唯一 record。</li>
+  </ul>
+  <h3>5.1 跨 agent 状态可见性</h3>
+  <p>agent 之间不互相推送状态,也没有点对点同步:<strong>最新状态就是账本本身</strong>。装载时默认只带自己命名空间;需要他人状态时按需只读——目标树(全局公开)、他人交接与笔记、workspace 黑板。写侧全部经 supervisor 串行化,<code>events.seq</code> 全局单调,读到 seq N 即读到了 N 之前的完整历史。所以"全局 git"已经存在:events 是不可变历史,goals 是当前树,<code>goals.revision</code> 提供并发写保护(CAS)。workspace 产物目录建议直接初始化为 git 仓库,免费获得版本、diff 与回滚。</p>
+</section>
+
+<section>
+  <h2><span class="no">6</span>执行模型</h2>
+  <h3>6.1 唤醒循环(唯一执行原语)</h3>
+  <figure>
+    <div class="diagram-frame">
+    <svg viewBox="0 0 1000 300" role="img" aria-label="唤醒循环:触发 → 装载 → 干活 → 写账 → 进程死亡" style="min-width:820px" font-family="ui-monospace, Menlo, monospace" font-size="13">
+      <defs>
+        <marker id="c1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker>
+        <marker id="c2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--brass)"/></marker>
+      </defs>
+      <g fill="none" stroke="var(--brass)" stroke-width="1.2">
+        <rect x="20" y="52" width="150" height="34" rx="2"/>
+        <rect x="20" y="96" width="150" height="34" rx="2"/>
+        <rect x="20" y="140" width="150" height="34" rx="2"/>
+        <rect x="644" y="182" width="190" height="34" rx="2" stroke-dasharray="5 4"/>
+      </g>
+      <g fill="none" stroke="currentColor" stroke-width="1.3">
+        <rect x="240" y="78" width="190" height="70" rx="2"/>
+        <rect x="500" y="78" width="190" height="70" rx="2"/>
+        <rect x="760" y="78" width="215" height="70" rx="2"/>
+      </g>
+      <g fill="currentColor" text-anchor="middle">
+        <text x="95" y="74" fill="var(--brass)">定时到点</text>
+        <text x="95" y="118" fill="var(--brass)">指标告警</text>
+        <text x="95" y="162" fill="var(--brass)">信箱投递</text>
+        <text x="335" y="105">装载</text>
+        <text x="335" y="128" font-size="11" fill="var(--faint)">角色基座 + 触发增量</text>
+        <text x="595" y="105">干活</text>
+        <text x="595" y="128" font-size="11" fill="var(--faint)">模型循环 · 提交动作</text>
+        <text x="867" y="105">写账</text>
+        <text x="867" y="128" font-size="11" fill="var(--faint)">结论 · 交接 · 投递 · 约下次</text>
+        <text x="739" y="204" font-size="12" fill="var(--brass)">闸门(危险清单 + R4)</text>
+      </g>
+      <g stroke="currentColor" stroke-width="1.3" fill="none">
+        <line x1="170" y1="69" x2="238" y2="97" marker-end="url(#c1)"/>
+        <line x1="170" y1="113" x2="238" y2="113" marker-end="url(#c1)"/>
+        <line x1="170" y1="157" x2="238" y2="130" marker-end="url(#c1)"/>
+        <line x1="430" y1="113" x2="498" y2="113" marker-end="url(#c1)"/>
+        <line x1="690" y1="113" x2="758" y2="113" marker-end="url(#c1)"/>
+        <polyline points="867,148 867,250 95,250 95,178" stroke-dasharray="4 4" marker-end="url(#c1)"/>
+      </g>
+      <g stroke="var(--brass)" stroke-width="1.2" fill="none">
+        <polyline points="595,148 595,199 640,199" marker-end="url(#c2)"/>
+      </g>
+      <text x="480" y="272" fill="var(--faint)" font-size="11" text-anchor="middle">进程死亡;写账阶段被 schema 校验,交接缺失则拒绝退出</text>
+    </svg>
+    </div>
+  </figure>
+  <p>写账阶段固定输出(schema 校验,不合规不放行退出)。接近 token / 时长上限时进入交接保留区:预留 handoff 专用预算,停发普通工具调用、只允许交接,仍无合法交接则标 <code>abnormal</code>。交接强制只约束正常退出:kill / OOM / 崩溃时该 wake 标 <code>abnormal</code>,已落账事件保留,下轮装载附异常标记与未交接的事件切片:</p>
+  <pre><code>handoff {
+  observations: []     // 本轮观察到的事实要点
+  results: []          // 做了什么、结果如何
+  next_steps: []       // 下轮计划(成为下次定时唤醒的任务清单)
+  blocker: string?     // 卡在哪
+}
+mail: []               // 分级投递
+next_wake_at: ts       // 自约下次唤醒</code></pre>
+
+  <h3>6.2 触发器与装载</h3>
+  <p>上下文 = 角色基座(随角色固定)+ 触发增量(随触发器)。醒来时一并消费全部未读信件;fyi 级不触发唤醒。</p>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>角色</th><th>基座</th><th>不给</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap">子 agent</td><td>自己的目标节点与预算余量 · 自己的笔记 · 最近一份交接 · 未确认 audit_advice · 未读信箱</td><td>他人状态与原始事件流(需要时经黑板按需读)</td></tr>
+      <tr><td class="nowrap">CEO</td><td>目标树全量 · 各子目标最近交接摘要 · 审计意见 · 未读信箱</td><td>原始事件流与执行细节</td></tr>
+      <tr><td class="nowrap">verifier</td><td>单 session 的交接 + trace + 动作的 reason/evidence + 本轮笔记 git diff</td><td>该 agent 的笔记全量与历史交接</td></tr>
+      <tr><td class="nowrap">全局审计</td><td>第一阶段:全量事实(增量)+ 外部指标;第二阶段追加:动作 reason(先盲判后对照)</td><td>一切交接与笔记(硬性)</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>触发器</th><th>唤醒谁</th><th>增量</th><th>本轮议程</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap">定时到点(自约)</td><td>子 agent</td><td>上份交接的 next_steps</td><td>按计划执行</td></tr>
+      <tr><td class="nowrap">定时到点(自约)</td><td>CEO</td><td>自上次以来的交接摘要与指标变化</td><td>自行判断是否 re-plan(调边界 / 挪预算 / 开关子目标);节奏与深度由 CEO 自定,不写成规则</td></tr>
+      <tr><td class="nowrap">指标告警</td><td>指标独占者</td><td>越线快照 + 窗口内事件切片</td><td>先诊断后行动</td></tr>
+      <tr><td class="nowrap">信箱(decision/emergency)</td><td>收件人</td><td>信全文 + 引用对象</td><td>就该事项决策</td></tr>
+      <tr><td class="nowrap">批复回执</td><td>提交者</td><td>批复结果</td><td>执行或改道</td></tr>
+      <tr><td class="nowrap">session 落账</td><td>verifier</td><td>= 基座</td><td>对表,意见落 audit_advice</td></tr>
+      <tr><td class="nowrap">周期 / 大注待批 / 指标异动</td><td>全局审计</td><td>相应事实切片;大注待批时为该动作的 reason 及证据链</td><td>归因核查;大注放行前必查</td></tr>
+      <tr><td class="nowrap">看门狗(心跳违约)</td><td>CEO;连续违约 → 人类</td><td>沉默者的调度记录与最后交接</td><td>诊断停摆</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section>
+  <h2><span class="no">7</span>验证</h2>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th></th><th>verifier(session 级)</th><th>全局审计(周期级)</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap">触发</td><td>session 落账,且本轮提交过动作;纯只读 session 抽验</td><td>周期定时;危险清单动作待批;外部指标异动</td></tr>
+      <tr><td class="nowrap">输入</td><td>该 session 的交接 + trace + 动作的 reason/evidence + 本轮笔记 git diff</td><td>两阶段:先仅凭事实与外部指标独立成判;后揭示动作 reason,查遗漏与冲突。全程禁读交接与笔记</td></tr>
+      <tr><td class="nowrap">核查内容</td><td>自述 vs 事实:声称的结果 trace 里有没有;reason 与证据是否支撑动作;写进笔记的判断 trace 里有没有依据</td><td>结果 vs 世界:独立重建归因,找 reason 未引用的反例事件(混杂因素、同期变更)</td></tr>
+      <tr><td class="nowrap">输出</td><td>actions.audit_advice;违规事件落账</td><td>audit_advice(附证据)、直达人类的告警</td></tr>
+      <tr><td class="nowrap">覆盖策略</td><td>高频全查(动外部者);观测成本占比后再定降级</td><td>抽查,按赌注加权:大注必查、高频动作优先、其余抽样</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">意见的送达不依赖 agent 自觉:未确认的 audit_advice 由 supervisor 强制注入该 agent 下次装载(R4);确认后转为按需查询。</p>
+</section>
+
+<section>
+  <h2><span class="no">8</span>闸门与安全</h2>
+  <h3>8.1 危险清单(唯一事前闸门)</h3>
+  <p>事后可纠正的错误交给验证层,不设事前审批。闸门是框架机制,清单内容是应用配置——框架不内置"哪些动作安全"的结论,风险由 connector 能力清单声明(§8.2),未声明者默认挂起。清单只含事后纠正不回来的两类,以下为本应用的配置示例:</p>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>类别</th><th>例子</th><th>处置</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap">默认(清单外)</td><td>拉数据、写结论、发实验素材、调出价、开灰度、跑 A/B</td><td>直接执行</td></tr>
+      <tr><td class="nowrap">钱</td><td>单笔或当日累计超该子目标预算线;预算耗尽</td><td>挂起 → CEO 批;耗尽硬停 → 升级人类</td></tr>
+      <tr><td class="nowrap">不可逆</td><td>签约、对外承诺、改核心定价、删数据、申请新账号/权限</td><td>挂起 → 人类审批队列</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <ul>
+    <li>批复本身是动作:同样携带 reason 与 evidence[seq]、同样被审计;全局审计在大注放行前必查其证据链(§7)。</li>
+    <li>挂起的是动作,不是 agent:提交后 session 正常继续/退出,批复走信箱回来。</li>
+    <li>接入新能力时由人工划定其危险动作;修改清单本身需人工批准(R5)。</li>
+    <li>系统外兜底:支付用带限额的虚拟卡;投放账户用平台侧预算上限。agent 无修改入口。</li>
+  </ul>
+  <h3>8.2 幂等与崩溃</h3>
+  <ul>
+    <li>外部动作经 connector 执行。connector 是受限子进程:supervisor 按声明的 scope 只下发该 connector 的密钥,不在自身进程内运行 connector 代码;agent 进程永不持有任何密钥。</li>
+    <li>每个 connector 带能力清单(capability manifest):是否原生幂等 · 结果如何查询 · 可否自动重试 · 风险声明与参数约束(账号 / 环境 / 金额 / 频率)。未声明能力的动作默认挂起(fail-closed)。</li>
+    <li>动作携带 actions.id 作幂等键;<code>dispatching</code> 中崩溃(含 supervisor 崩溃)恢复后一律标 <code>unknown</code>。对账不是终态而是获得结果的方式:查询外部实际状态后回到 <code>confirmed</code> 或 <code>failed</code>,<code>reconciled_at</code> 记录对账时刻。unknown 默认只允许对账;仅当 connector 声明原生幂等时才允许自动重发。</li>
+  </ul>
+  <h3>8.3 Computer use</h3>
+  <ul>
+    <li>有 API 的能力一律走 API;computer use 仅用于无 API 的界面。</li>
+    <li>浏览器会话挂受限子账号(CMS 草稿角色、设上限的投放子账户、只读财务),使危险操作在该角色下不可表达。</li>
+    <li>会话操作流全程落账,verifier 事后对照申请意图。</li>
+    <li>提权 = 人工亲自操作,或授予一次性提权会话。</li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="no">9</span>工程决策</h2>
+  <h3>9.1 runner 选型(2026-08-17 源码调研结论)</h3>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th></th><th>pi-agent-core</th><th>dsh(仅作 runner)</th><th>codex exec / SDK</th><th>自建薄循环</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap">嵌入形态</td><td>纯 TS 库,Agent 类直接嵌入,无内置工具包袱</td><td>SDK 子进程 JSON-RPC,<code>run()</code> 到静止返回;authority wall 不影响单次驱动</td><td><code>codex exec</code> 子进程包装,thread/resume 现成</td><td>—</td></tr>
+      <tr><td class="nowrap">prompt / 工具自定义</td><td>完全自定义;工具 = TypeBox schema + execute;钩子齐(before/after ToolCall、shouldStopAfterTurn、transformContext)</td><td>YAML 组合树,不装即不存在;每角色一份 preset,约 0.5 人日/角色</td><td>受限:prompt 走 AGENTS.md/developer 消息,自有工具走 MCP</td><td>完全自定义</td></tr>
+      <tr><td class="nowrap">结构化交接</td><td>组合实现:handoff 工具 + terminate + provider 端 strict;"不交接不放行"用钩子拦</td><td>subagent 层现成(outputSchema);顶层需委托一层或写小插件(1–2 人日)</td><td><code>outputSchema</code> 一等参数,现成</td><td>自己写(1–2 天)</td></tr>
+      <tr><td class="nowrap">trace</td><td>JSONL 完整(toolCall/结果/用量);有官方 SQLite session backend</td><td>SDK 实时事件流完整;落盘格式 v0 无兼容承诺,需 pin</td><td>rollout jsonl append-only,完整</td><td>自己写</td></tr>
+      <tr><td class="nowrap">session 内 compaction</td><td>无内置,需借 Codex 设计自实现(transformContext 钩子是挂点)</td><td>有(surface replacement + 剪枝)</td><td><strong>最成熟</strong>:mid-turn 内联压缩(90% 阈值),10h+ 已验证;压缩只改模型视图,rollout 不动</td><td>自己写</td></tr>
+      <tr><td class="nowrap">模型支持</td><td>30+ provider,可中途换模型</td><td>多 provider</td><td>偏绑 OpenAI 生态</td><td>随意</td></tr>
+      <tr><td class="nowrap">主要风险</td><td>0.x API 漂移;单人主导(~70% commits)</td><td>协议 0.0.1 + session v0 均无兼容承诺;依赖百余包,冷启动秒级</td><td>prompt/工具控制面窄,难承载我们的角色定制</td><td>工作量最大(5–10 人日),无生态</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p><strong>决定:采用 pi-agent-core(2026-08-18 拍板)。</strong>判定依据是本系统的进程模型:每唤醒一进程、每进程一个 agent、spawn 配置由 supervisor 拼装。在此模型下,dsh 最强的机制解决的是我们没有的问题——scope 遮蔽服务于同一运行时内多 agent 共存(我们的角色组合 = 一份 spawn 配置);事件同源只是导入账本时的映射便利(pi trace 同样完整)。所需能力在 pi 中的落点:闸门 = <code>beforeToolCall</code> / <code>shouldStopAfterTurn</code> 钩子;交接强制 = handoff 工具 + terminate + provider 端 strict;compaction = 照 Codex mid-turn 设计在 <code>transformContext</code> 实现,支撑不可分段的 10h+ 单 wake;trace 经官方 SQLite backend 或 JSONL 映射入 events 表。借 dsh 的四个设计(整值事件、位置替换、unknown 语义、交接 schema)全部落在 supervisor / 账本层,与 runner 无关,不需要 runner 具备插件系统。</p>
+  <p>风险管理:pin pi 0.x 版本;runner 以防腐层包装(接口只暴露 spawn/结果/事件流,可整体替换)。<strong>dsh 为备选</strong>,适用条件:想零成本获得现成工具集与结构化输出插件(约 3–6 人日跑通),代价是 pin v0 格式 + Cordis 学习面 + 秒级冷启动。dsh 的本命场景是有人值守的深度定制交互式 agent 应用与高取证要求的会话系统,与本系统的无人值守目标正交。codex exec 不适合当通用 runner(定制面窄),但其 mid-turn compaction 与 <code>outputSchema</code> 为直接抄的设计参照。自迭代不构成选型差异:自写工具经账本注册、下次唤醒 spawn 时注入,任一 runner 均支持;session 中途热改运行时是审计盲区,不采用。</p>
+  <ul>
+    <li><strong>进程:</strong>supervisor(常驻)+ agent runner(每唤醒一进程)+ 只读面板(直读 SQLite,不经 agent 转述;首版可为静态日报页)。</li>
+    <li><strong>supervisor 独立进程,不作任何 runner 框架的插件:</strong>看门狗必须在被监督者的故障域之外,否则看门狗死掉无人发现。runner 侧的 harness 逻辑(闸门客户端、交接强制、事件导出、compaction 策略)则以 runner 插件形态承载——插件是伸进每次唤醒的手,supervisor 是唤醒之外的地面。</li>
+    <li><strong>存储:</strong>单写者 SQLite WAL + workspace 文件树。</li>
+    <li><strong>借用 dsh 的设计</strong>(不用其代码):整值事件 + fold 投影;位置替换式压缩 + source_seqs;<code>outcome: unknown</code> 崩溃语义;Ralph 结构化交接 schema。</li>
+    <li><strong>不基于 dsh 开发的原因:</strong>其 authority wall 刻意禁止跨重启自主运行(恢复必须有真人消息),与本系统目标冲突;会话格式 v0 无迁移承诺。</li>
+  </ul>
+</section>
+
+<section>
+  <h2><span class="no">10</span>里程碑</h2>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>阶段</th><th>范围</th><th>验收标准</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap">0 · 契约与故障语义<br><span class="note">1–2 周</span></td><td>账本 / wakes / actions / 指标 / connector 五契约定稿 + testkit(faux model、模拟时钟、内存账本)</td><td>故障注入套件全绿:每个状态转换点 kill -9,账本一致、动作不重放、unknown 全对上</td></tr>
+      <tr><td class="nowrap">1A · 持久化内核<br><span class="note">2 周</span></td><td>supervisor(系统级 supervise 拉起)+ 1 个子 agent + 交接强制 + wakes lease + 模拟 connector,无真实外部副作用</td><td>无人值守连跑 7 天:不崩、每次唤醒上下文有界、kill -9(agent 与 supervisor)后恢复正确</td></tr>
+      <tr><td class="nowrap">1B · 长 wake 连续性<br><span class="note">1–2 周</span></td><td>+ mid-turn compaction(只改发给模型的视图,不改 trace 与账本)</td><td>≥10h 单 wake、经历多轮压缩:trace 与账本无损、未决 action 与关键约束不丢、压缩前/中/后 kill -9 均可恢复、外部副作用不重复。CI 缩小 context 阈值快速触发多轮压缩,完整压测入 nightly</td></tr>
+      <tr><td class="nowrap">2 · 窄场景闭环<br><span class="note">2–3 周</span></td><td>参考应用(repo 守护):1 个指标 + 1 个可核对 connector + 硬额度 + 独立 workspace</td><td>连续运行 14 天,危险清单零穿透</td></tr>
+      <tr><td class="nowrap">3 · 验证层<br><span class="note">2 周</span></td><td>+ verifier + 全局审计(两阶段)+ audit_advice 链路;人工标注集;观测 verifier 成本占比</td><td><strong>go/no-go:</strong>标注集分校准集与保留测试集,阈值在最终测试前固定;考察 precision(误报耗人工带宽)与按风险加权的 recall(高风险错误不得漏)</td></tr>
+      <tr><td class="nowrap">4 · Multi-agent + 真实预算<br><span class="note">3–4 周</span></td><td>+ CEO + 第 2 个子 agent + mailbox + 面板 + 小额真钱</td><td>运行两周,危险清单零穿透,人工介入 ≤ 1 次/天</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section>
+  <h2><span class="no">11</span>已决事项与遗留风险</h2>
+  <p>已决:runner = pi-agent-core(§9.1);框架保持 general,参考应用 = repo 守护(§12.1);长期记忆为 workspace 笔记,agent 自管(不设 beliefs 表与整理角色);CEO re-plan 时机与深度自定(不写成规则);goals.budget 可选(钱的硬闸在危险清单/connector 层),wake 默认设 token/时长上限(可配置),可分段长任务链式唤醒、不可分段者靠 session 内 compaction(里程碑 1);唤醒经 wakes 表 lease 事务化;每 wake 独立 worktree,abnormal 不合并留取证;外部动作经 connector 受限子进程 + 能力清单;跨 agent 状态经共享账本读取,不做点对点同步(§5.1);常驻服务只有 supervisor(§4.2)。</p>
+  <p>待契约设计期(里程碑 0)定稿:connector 能力清单字段、指标契约字段(含缺数与 freshness 超限处置)、wakes 的触发去重/合并与重试退避参数、worktree 合并规则细则、预算预占的币种与窗口语义。</p>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>遗留风险</th><th>性质</th><th>对策</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap">pi 处于 0.x,API 会漂移</td><td>已知代价,非未决问题</td><td>锁版本;runner 调用面收在一层薄适配内(spawn 配置 / 钩子 / trace 导出),升级时只改这一层</td></tr>
+      <tr><td class="nowrap">supervisor 是唯一单点</td><td>刻意选择(看门狗须在被监护故障域外)</td><td>supervisor 本身无模型调用、逻辑可穷尽测试;进程级 supervise + 崩溃后由账本重放恢复,unknown 动作对账</td></tr>
+      <tr><td class="nowrap">compaction 需自行实现</td><td>工作量,非架构不确定性</td><td>照 Codex mid-turn 方案在 <code>transformContext</code> 落地,列入里程碑 1;可分段的长任务用链式唤醒,不依赖它</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section>
+  <h2><span class="no">12</span>开源形态</h2>
+  <p>按开源框架设计,同仓附一个官方参考应用。定位:<strong>"a long-running, goal-oriented agentic system"</strong>。与 runner 互补:runner 管单次会话,本框架管进程、状态、闸门、审计。许可 Apache-2.0。</p>
+
+  <h3>12.1 包结构</h3>
+  <p>框架只提供机制(规则的机械执行);角色组合是配置,§4.1 的角色表移入 <code>examples/</code>。monorepo,按依赖切包:</p>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>包</th><th>职责</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap mono-cell">ledger-contract</td><td>五表 schema、R1–R6 不变量、装载/交接 schema、类型定义。无存储实现、零运行时依赖</td></tr>
+      <tr><td class="nowrap mono-cell">ledger-sqlite</td><td>SQLite 参考实现(WAL、FTS5、迁移工具),过契约一致性测试</td></tr>
+      <tr><td class="nowrap mono-cell">supervisor</td><td>daemon,§4.2 六服务。红线:进程内不执行用户插件或 agent 提供的代码</td></tr>
+      <tr><td class="nowrap mono-cell">runner-pi</td><td>pi 适配器。runner 契约 = spawn 配置 + 钩子 + trace 无损导出,接新 runner 即实现此契约</td></tr>
+      <tr><td class="nowrap mono-cell">testkit</td><td>faux model、模拟时钟、内存账本、故障注入。公开 API;全部测试零真实密钥</td></tr>
+      <tr><td class="nowrap mono-cell">examples</td><td>官方参考应用:读者可自行核验的长时程任务(如:保持仓库依赖常新、测试常绿,持续三个月)</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">agent 侧代码只依赖 ledger-contract,不依赖 ledger-sqlite——"agent 不碰数据库"由依赖检查执行。私有业务应用独立仓,不作公开示例。skills 采用 agentskills.io 标准。</p>
+
+  <h3>12.2 契约管理</h3>
+  <p>五个公共契约:账本 schema、runner 适配、装载协议、交接 schema、connector 能力清单(§8.2)。每个带 <code>contract_version</code>、stable/experimental 标注、additive-only 演进、一致性测试。</p>
+  <ul>
+    <li>账本 schema:核心表列固定,语义载荷走 JSON,扩展走附加表;迁移工具随首版发布。</li>
+    <li>装载协议可替换;不可协商项:未确认 audit_advice 必须进装载(带理由与证据),原始推理链不得回灌。</li>
+    <li>交接 schema 可扩展字段;<code>next_steps</code> / <code>blocker</code> 语义保留(调度器依赖)。</li>
+    <li>全仓 lockstep 版本;每包 CHANGELOG,Breaking Changes 附迁移代码;架构决策记 ADR。</li>
+  </ul>
+
+  <h3>12.3 发布前置条件</h3>
+  <ul>
+    <li>故障注入套件全绿:模拟时钟 + faux model,在每个状态转换点 kill -9,断言账本一致、动作不重放、unknown 全对上。</li>
+    <li>一份真实长跑账本,脱敏后公开,可独立审计。</li>
+    <li>README 写明安全边界——机械保证:危险清单内的动作未经批准不执行、审计意见必然送达下次装载;不保证:模型判断正确、防御 prompt injection。</li>
+    <li>默认 fail-closed:首跑 dry-run、无外部密钥、token 硬上限开启。</li>
+  </ul>
+</section>
+
+</div>
+</body>
+</html>

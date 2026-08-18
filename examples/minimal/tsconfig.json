@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "rootDir": "src", "outDir": "dist", "tsBuildInfoFile": "dist/.tsbuildinfo" },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../../packages/ledger-contract" },
+    { "path": "../../packages/ledger-sqlite" },
+    { "path": "../../packages/runner-pi" },
+    { "path": "../../packages/supervisor" },
+    { "path": "../../packages/testkit" }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/ledger-contract" },
+    { "path": "packages/ledger-sqlite" },
+    { "path": "packages/runner-pi" },
+    { "path": "packages/supervisor" },
+    { "path": "packages/testkit" },
+    { "path": "examples/minimal" }
+  ]
+}
