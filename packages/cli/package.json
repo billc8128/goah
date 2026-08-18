@@ -1,0 +1,14 @@
+{
+  "name": "@goah/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": { "goah": "./dist/cli.js" },
+  "dependencies": {
+    "@goah/ledger-contract": "0.1.0",
+    "@goah/ledger-sqlite": "0.1.0",
+    "@goah/runner-pi": "0.1.0",
+    "@goah/supervisor": "0.1.0"
+  }
+}

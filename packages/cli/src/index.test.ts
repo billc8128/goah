@@ -1,0 +1,29 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+import { loadConfig, SupervisorLock } from "./index.js";
+
+test("CLI initializes versioned config, resolves secret references, and enforces singleton lock", () => {
+  const directory = mkdtempSync(join(tmpdir(), "goah-cli-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: directory });
+  execFileSync("git", ["config", "user.email", "goah@example.test"], { cwd: directory });
+  execFileSync("git", ["config", "user.name", "GOAH Test"], { cwd: directory });
+  execFileSync("git", ["commit", "--allow-empty", "-m", "initial"], { cwd: directory });
+  const cli = fileURLToPath(new URL("./cli.js", import.meta.url));
+  execFileSync(process.execPath, [cli, "init"], { cwd: directory });
+  assert.equal(JSON.parse(readFileSync(join(directory, "goah.config.json"), "utf8")).version, 1);
+  process.env.GOAH_CLI_TEST_KEY = "secret";
+  const raw = JSON.parse(readFileSync(join(directory, "goah.config.json"), "utf8"));
+  raw.runner.env.ANTHROPIC_API_KEY = "env:GOAH_CLI_TEST_KEY";
+  writeFileSync(join(directory, "goah.config.json"), JSON.stringify(raw));
+  assert.equal(loadConfig(join(directory, "goah.config.json")).runner.env?.ANTHROPIC_API_KEY, "secret");
+  delete process.env.GOAH_CLI_TEST_KEY;
+  const lock = new SupervisorLock(join(directory, ".goah")); lock.acquire();
+  assert.throws(() => new SupervisorLock(join(directory, ".goah")).acquire(), /already running/);
+  lock.release();
+  const next = new SupervisorLock(join(directory, ".goah")); next.acquire(); next.release();
+});
