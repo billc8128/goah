@@ -5,6 +5,7 @@ import {
   assertHandoff,
   assertRunLimits,
   type JsonValue,
+  type AgentCapability,
   type RunRequest,
   type Runner,
   type RunnerHandle,
@@ -89,10 +90,14 @@ export interface ProcessRunnerOptions {
 
 export function piWorkerPath(): string { return fileURLToPath(new URL("./pi-worker.js", import.meta.url)); }
 
-type WorkerRequest = Omit<RunRequest, "now" | "emit">;
+type WorkerRequest = Omit<RunRequest, "now" | "emit" | "rpc">;
 type WorkerMessage =
   | { type: "trace"; event: { kind: string; data: JsonValue } }
+  | { type: "rpc_request"; id: string; method: AgentCapability; params: JsonValue }
   | { type: "result"; result: RunnerResult };
+type ParentMessage =
+  | { type: "start"; request: WorkerRequest }
+  | { type: "rpc_response"; id: string; result?: JsonValue; error?: string };
 
 /** Real process boundary. The child stays idle until begin() sends its request. */
 export class ProcessRunner implements Runner {
@@ -122,7 +127,11 @@ export class ProcessRunner implements Runner {
       try {
         const message = JSON.parse(line) as WorkerMessage;
         if (message.type === "trace") request.emit(message.event);
-        else messageResult = message.result;
+        else if (message.type === "rpc_request") {
+          void Promise.resolve(request.rpc?.(message.method, message.params) ?? Promise.reject(new Error("runner RPC is unavailable")))
+            .then((result) => child.stdin?.write(`${JSON.stringify({ type: "rpc_response", id: message.id, result } satisfies ParentMessage)}\n`))
+            .catch((error) => child.stdin?.write(`${JSON.stringify({ type: "rpc_response", id: message.id, error: error instanceof Error ? error.message : String(error) } satisfies ParentMessage)}\n`));
+        } else messageResult = message.result;
       } catch (error) {
         protocolError = error instanceof Error ? error.message : String(error);
         void terminate();
@@ -151,7 +160,7 @@ export class ProcessRunner implements Runner {
           ...(request.workspacePath ? { workspacePath: request.workspacePath } : {}),
           limits: request.limits,
         };
-        child.stdin?.end(`${JSON.stringify(serializable)}\n`);
+        child.stdin?.write(`${JSON.stringify({ type: "start", request: serializable } satisfies ParentMessage)}\n`);
         timer = setTimeout(() => { timedOut = true; void terminate(); }, request.limits.maxWallClockMs);
       },
       result,
@@ -162,7 +171,8 @@ export class ProcessRunner implements Runner {
   async terminateProcess(pid: number): Promise<void> { await terminatePid(pid, this.options.killGraceMs ?? 500); }
 }
 
-export type WorkerRun = (request: WorkerRequest, emit: (event: { kind: string; data: JsonValue }) => void) => Promise<RunnerResult>;
+export type WorkerRpc = (method: AgentCapability, params: JsonValue) => Promise<JsonValue>;
+export type WorkerRun = (request: WorkerRequest, emit: (event: { kind: string; data: JsonValue }) => void, rpc: WorkerRpc) => Promise<RunnerResult>;
 
 /** Entry helper for runner executables. It exits when its parent disappears. */
 export async function runProcessWorker(run: WorkerRun): Promise<void> {
@@ -172,13 +182,32 @@ export async function runProcessWorker(run: WorkerRun): Promise<void> {
   }, 250);
   monitor.unref();
   const input = createInterface({ input: process.stdin });
-  for await (const line of input) {
-    const request = JSON.parse(line) as WorkerRequest;
-    const result = await run(request, (event) => process.stdout.write(`${JSON.stringify({ type: "trace", event })}\n`));
-    process.stdout.write(`${JSON.stringify({ type: "result", result })}\n`);
-    clearInterval(monitor);
-    return;
-  }
+  const iterator = input[Symbol.asyncIterator]();
+  const first = await iterator.next();
+  if (first.done) throw new Error("runner parent closed before start");
+  const start = JSON.parse(first.value) as ParentMessage;
+  if (start.type !== "start") throw new Error("first runner message must be start");
+  const pending = new Map<string, { resolve(value: JsonValue): void; reject(error: Error): void }>();
+  void (async () => {
+    for await (const line of { [Symbol.asyncIterator]: () => iterator }) {
+      const message = JSON.parse(line) as ParentMessage;
+      if (message.type !== "rpc_response") continue;
+      const waiter = pending.get(message.id);
+      if (!waiter) continue;
+      pending.delete(message.id);
+      if (message.error) waiter.reject(new Error(message.error)); else waiter.resolve(message.result ?? null);
+    }
+  })();
+  const rpc: WorkerRpc = (method, params) => new Promise((resolve, reject) => {
+    const id = crypto.randomUUID();
+    pending.set(id, { resolve, reject });
+    process.stdout.write(`${JSON.stringify({ type: "rpc_request", id, method, params })}\n`);
+  });
+  const result = await run(start.request, (event) => process.stdout.write(`${JSON.stringify({ type: "trace", event })}\n`), rpc);
+  process.stdout.write(`${JSON.stringify({ type: "result", result })}\n`);
+  input.close();
+  process.stdin.unref();
+  clearInterval(monitor);
 }
 
 async function terminateOwnedChild(child: ChildProcess, graceMs: number): Promise<void> {

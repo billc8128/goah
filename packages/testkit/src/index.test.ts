@@ -283,6 +283,36 @@ test("official Pi agent core worker completes a structured handoff through the p
   ledger.close();
 });
 
+test("bidirectional runner RPC applies child capabilities and rejects parent-only goal writes", async () => {
+  const clock = new SimulatedClock();
+  const ledger = createMemoryLedger({ clock });
+  const connector = new MockConnector();
+  const seed = ledger.appendEvent({ ts: clock.now().toISOString(), agent: "worker", kind: "fact", data: { text: "rpcseed" }, wakeId: null });
+  const runner = fauxRunner([
+    { tokens: 1, rpc: { method: "ledger.search", params: { query: "rpcseed" } } },
+    { tokens: 1, rpc: { method: "budget.read", params: {} } },
+    { tokens: 1, rpc: { method: "mail.send", params: { to: "human", level: "fyi", body: { message: "working" } } } },
+    { tokens: 1, rpc: { method: "schedule.set", params: { at: "2026-08-20T00:00:00.000Z", reason: "continue" } } },
+    { tokens: 1, rpc: { method: "action.submit", params: { id: "rpc-action", kind: "mock.write", connector: "mock", payload: {}, reason: "seed supports it", evidence: [seed.seq] } } },
+    { tokens: 1, handoff: { handoff: { observations: [], results: [], nextSteps: [] }, mail: [], nextWakeAt: null } },
+  ]);
+  const supervisor = new Supervisor(ledger, runner, clock, { profiles: [{ agent: "worker", role: "child" }] });
+  supervisor.registerConnector(connector.spec);
+  supervisor.createGoal(goal()); supervisor.planWake("worker", clock.now().toISOString(), "rpc");
+  assert.equal((await supervisor.tick())?.status, "done");
+  assert.equal(ledger.action("rpc-action")?.status, "confirmed");
+  assert.equal(ledger.mailbox().some((mail) => mail.to === "human"), true);
+  assert.equal(ledger.schedules()[0]?.nextWakeAt, "2026-08-20T00:00:00.000Z");
+  assert.equal(ledger.events().filter((event) => event.kind.startsWith("rpc.")).length, 5);
+
+  const denied = new Supervisor(ledger, fauxRunner([{ tokens: 1, rpc: { method: "goal.put", params: { goal: { ...goal(), revision: 1 } } } }]), clock, { profiles: [{ agent: "worker", role: "child" }] });
+  clock.advance(1);
+  denied.planWake("worker", clock.now().toISOString(), "denied");
+  assert.equal((await denied.tick())?.status, "abnormal");
+  assert.equal(ledger.goal("root")?.revision, 0);
+  ledger.close();
+});
+
 async function waitFor(predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 2_000;
   while (!predicate()) { if (Date.now() > deadline) throw new Error("condition timed out"); await new Promise((resolve) => setTimeout(resolve, 10)); }

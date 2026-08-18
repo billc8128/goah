@@ -11,9 +11,10 @@ interface WorkerStep {
   crash?: string;
   hang?: boolean;
   delayMs?: number;
+  rpc?: { method: import("@goah/ledger-contract").AgentCapability; params: JsonValue };
 }
 
-await runProcessWorker(async (request, emit): Promise<RunnerResult> => {
+await runProcessWorker(async (request, emit, rpc): Promise<RunnerResult> => {
   if (process.env.GOAH_FAUX_CONTEXT_FILE) writeFileSync(process.env.GOAH_FAUX_CONTEXT_FILE, JSON.stringify(request.context));
   const steps = JSON.parse(process.env.GOAH_FAUX_STEPS ?? "[]") as WorkerStep[];
   let tokensUsed = 0;
@@ -25,6 +26,7 @@ await runProcessWorker(async (request, emit): Promise<RunnerResult> => {
       writeFileSync(path, step.write.content);
     }
     for (const trace of step.trace ?? []) emit(trace);
+    if (step.rpc) emit({ kind: "rpc.result", data: await rpc(step.rpc.method, step.rpc.params) });
     tokensUsed += step.tokens;
     if (step.crash) throw new Error(step.crash);
     if (step.delayMs) await new Promise((resolve) => setTimeout(resolve, step.delayMs));

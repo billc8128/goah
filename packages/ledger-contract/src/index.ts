@@ -163,6 +163,24 @@ export interface RunnerTraceEvent {
   data: JsonValue;
 }
 
+export type AgentRole = "child" | "ceo" | "verifier" | "audit";
+export type AgentCapability =
+  | "ledger.search"
+  | "budget.read"
+  | "mail.send"
+  | "schedule.set"
+  | "action.submit"
+  | "audit.ack"
+  | "audit.write"
+  | "goal.put";
+
+export interface AgentProfile {
+  agent: string;
+  role: AgentRole;
+  capabilities?: AgentCapability[];
+  systemPrompt?: string;
+}
+
 export interface RunRequest {
   wake: WakeSnapshot;
   context: JsonValue;
@@ -170,6 +188,7 @@ export interface RunRequest {
   limits: RunLimits;
   now(): string;
   emit(event: RunnerTraceEvent): void;
+  rpc?(method: AgentCapability, params: JsonValue): Promise<JsonValue>;
 }
 
 export type RunnerResult =

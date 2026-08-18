@@ -7,8 +7,8 @@ import { Agent, type AgentMessage, type AgentTool } from "@earendil-works/pi-age
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, Type, type Message, type Model, type Api } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
-import type { JsonValue, RunnerResult, WakeOutput } from "@goah/ledger-contract";
-import { runProcessWorker } from "./index.js";
+import type { AgentCapability, JsonValue, RunnerResult, WakeOutput } from "@goah/ledger-contract";
+import { runProcessWorker, type WorkerRpc } from "./index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -24,7 +24,7 @@ export function compactMessages(messages: AgentMessage[], maxRecent = 8): AgentM
 }
 
 export async function runPiWorker(): Promise<void> {
-  await runProcessWorker(async (request, emit): Promise<RunnerResult> => {
+  await runProcessWorker(async (request, emit, rpc): Promise<RunnerResult> => {
     const provider = process.env.GOAH_PI_PROVIDER ?? "anthropic";
     const modelId = process.env.GOAH_PI_MODEL;
     if (!modelId) throw new Error("GOAH_PI_MODEL is required");
@@ -45,7 +45,7 @@ export async function runPiWorker(): Promise<void> {
     let tokensUsed = 0;
     let compactions = 0;
     const workspace = request.workspacePath ? resolve(request.workspacePath) : undefined;
-    const tools = createTools(workspace, (value) => { output = value; }, process.env.GOAH_PI_ALLOW_BASH === "true");
+    const tools = createTools(workspace, (value) => { output = value; }, process.env.GOAH_PI_ALLOW_BASH === "true", rpc);
     const compactAt = Number(process.env.GOAH_PI_COMPACT_AT_TOKENS ?? Math.floor(request.limits.maxTokens * 0.6));
     const agent = new Agent({
       initialState: {
@@ -79,7 +79,7 @@ export async function runPiWorker(): Promise<void> {
   });
 }
 
-function createTools(workspace: string | undefined, handoff: (output: WakeOutput) => void, allowBash: boolean): AgentTool<any>[] {
+function createTools(workspace: string | undefined, handoff: (output: WakeOutput) => void, allowBash: boolean, rpc: WorkerRpc): AgentTool<any>[] {
   const handoffTool: AgentTool<any> = {
     name: "handoff",
     label: "Handoff",
@@ -98,7 +98,8 @@ function createTools(workspace: string | undefined, handoff: (output: WakeOutput
       return { content: [{ type: "text", text: "handoff recorded" }], details: value, terminate: true };
     },
   };
-  if (!workspace) return [handoffTool];
+  const rpcTools = createRpcTools(rpc);
+  if (!workspace) return [...rpcTools, handoffTool];
   const readTool: AgentTool<any> = {
     name: "read_file", label: "Read file", description: "Read a UTF-8 file inside the wake workspace.",
     parameters: Type.Object({ path: Type.String() }),
@@ -114,7 +115,7 @@ function createTools(workspace: string | undefined, handoff: (output: WakeOutput
     parameters: Type.Object({ note: Type.String() }),
     execute: async (_id, params) => { const input = params as { note: string }; await appendFile(scoped(workspace, ".goah-notes.md"), `${input.note}\n`); return { content: [{ type: "text", text: "note recorded" }], details: { note: input.note } }; },
   };
-  if (!allowBash) return [readTool, writeTool, noteTool, handoffTool];
+  if (!allowBash) return [readTool, writeTool, noteTool, ...rpcTools, handoffTool];
   const bashTool: AgentTool<any> = {
     name: "bash", label: "Bash", description: "Run a shell command in the wake workspace.",
     parameters: Type.Object({ command: Type.String() }), executionMode: "sequential",
@@ -124,7 +125,24 @@ function createTools(workspace: string | undefined, handoff: (output: WakeOutput
       return { content: [{ type: "text", text: `${result.stdout}${result.stderr}`.slice(-50_000) }], details: { command: input.command } };
     },
   };
-  return [readTool, writeTool, noteTool, bashTool, handoffTool];
+  return [readTool, writeTool, noteTool, bashTool, ...rpcTools, handoffTool];
+}
+
+function createRpcTools(rpc: WorkerRpc): AgentTool<any>[] {
+  const tool = (name: string, description: string, method: AgentCapability, parameters: ReturnType<typeof Type.Object>): AgentTool<any> => ({
+    name, label: name, description, parameters,
+    execute: async (_id, params) => { const result = await rpc(method, params as JsonValue); return { content: [{ type: "text", text: JSON.stringify(result) }], details: result }; },
+  });
+  return [
+    tool("ledger_search", "Search durable ledger facts.", "ledger.search", Type.Object({ query: Type.String(), limit: Type.Optional(Type.Number()) })),
+    tool("budget_status", "Read the current goal budget exposure.", "budget.read", Type.Object({})),
+    tool("send_mail", "Send a durable message to another agent or human.", "mail.send", Type.Object({ to: Type.String(), level: Type.Union([Type.Literal("fyi"), Type.Literal("decision"), Type.Literal("emergency")]), body: Type.Any() })),
+    tool("schedule_wake", "Schedule this agent's next wake.", "schedule.set", Type.Object({ at: Type.String(), reason: Type.String() })),
+    tool("submit_action", "Submit a gated external action with evidence.", "action.submit", Type.Object({ id: Type.String(), kind: Type.String(), connector: Type.String(), payload: Type.Any(), reason: Type.String(), evidence: Type.Array(Type.Number()) })),
+    tool("ack_audit_advice", "Acknowledge audit advice after incorporating it.", "audit.ack", Type.Object({ actionId: Type.String() })),
+    tool("write_audit_advice", "Write audit advice for an action.", "audit.write", Type.Object({ actionId: Type.String(), body: Type.Any(), evidence: Type.Array(Type.Number()) })),
+    tool("put_goal", "Create or update a goal using parent-layer authority.", "goal.put", Type.Object({ goal: Type.Any() })),
+  ];
 }
 
 function scoped(workspace: string, path: string): string {

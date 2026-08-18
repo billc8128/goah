@@ -6,6 +6,9 @@ import {
   capabilityFor,
   evaluateMetric,
   type ActionSnapshot,
+  type AgentCapability,
+  type AgentProfile,
+  type AgentRole,
   type AuditAdvice,
   type Clock,
   type ConnectorDispatchResult,
@@ -121,7 +124,7 @@ export interface SupervisorOptions {
   auditWriters?: string[];
   heartbeatPolicies?: Array<{ agent: string; maxSilentMs: number; escalateTo: string; since?: string }>;
   retryPolicy?: { maxAttempts: number; baseDelayMs: number };
-  profiles?: Array<{ agent: string; role: "child" | "ceo" | "verifier" | "audit" }>;
+  profiles?: AgentProfile[];
 }
 
 interface MetricCollectorRegistration { goalId: string; spec: MetricProcessSpec; intervalMs: number; nextAt: number }
@@ -139,7 +142,7 @@ export class Supervisor {
   readonly #metricCollectors = new Map<string, MetricCollectorRegistration>();
   readonly #heartbeatPolicies: NonNullable<SupervisorOptions["heartbeatPolicies"]>;
   readonly #retryPolicy: NonNullable<SupervisorOptions["retryPolicy"]>;
-  readonly #profiles: Map<string, "child" | "ceo" | "verifier" | "audit">;
+  readonly #profiles: Map<string, AgentProfile>;
 
   constructor(readonly ledger: Ledger, readonly runner: Runner, readonly clock: Clock, options: SupervisorOptions = {}) {
     this.#limits = options.limits ?? defaultLimits;
@@ -150,7 +153,7 @@ export class Supervisor {
     this.#auditWriters = new Set(options.auditWriters ?? ["verifier", "audit"]);
     this.#heartbeatPolicies = options.heartbeatPolicies ?? [];
     this.#retryPolicy = options.retryPolicy ?? { maxAttempts: 0, baseDelayMs: 1_000 };
-    this.#profiles = new Map((options.profiles ?? []).map((profile) => [profile.agent, profile.role]));
+    this.#profiles = new Map((options.profiles ?? []).map((profile) => [profile.agent, profile]));
   }
 
   registerConnector(connector: ConnectorProcessSpec): void { this.#connectors.set(connector.manifest.connector, connector); }
@@ -199,6 +202,7 @@ export class Supervisor {
         limits: this.#limits,
         now: () => this.#now(),
         emit: (trace) => this.ledger.appendRunnerEvent({ ts: this.#now(), agent: running.agent, kind: `runner.${trace.kind}`, data: trace.data, wakeId: running.id }, leaseToken),
+        rpc: (method, params) => this.#agentRpc(running, leaseToken, method, params),
       });
       if (handle.pid) running = this.ledger.attachWakeProcess(running.id, leaseToken, handle.pid, this.#now());
       handle.begin();
@@ -241,14 +245,14 @@ export class Supervisor {
     }
   }
 
-  async submitAction(action: Omit<ActionSnapshot, "connector" | "gated" | "status" | "reconciledAt" | "externalRef">, connectorName: string): Promise<ActionSnapshot> {
+  async submitAction(action: Omit<ActionSnapshot, "connector" | "gated" | "status" | "reconciledAt" | "externalRef">, connectorName: string, wakeId?: string): Promise<ActionSnapshot> {
     const connector = this.#connectors.get(connectorName);
     const capability = connector ? capabilityFor(connector.manifest, action.kind) : null;
     const gated = !connector || !capability || capability.risk !== "reversible"
       || (!connector.manifest.dryRun && !this.#allowExternalActions)
       || (capability ? !payloadWithinConstraints(action.payload, capability.constraints) : true);
     const requested: ActionSnapshot = { ...action, connector: connectorName, gated, status: "requested", reconciledAt: null, externalRef: null };
-    this.ledger.requestAction(requested, action.agent);
+    this.ledger.requestAction(requested, action.agent, wakeId);
     if (gated || !connector) return this.#action(action.id);
     this.ledger.approveAction(action.id, "supervisor", "declared reversible dry-run capability", action.evidence);
     return this.#dispatch(action.id);
@@ -266,7 +270,8 @@ export class Supervisor {
   }
 
   putAuditAdvice(id: string, advice: Omit<AuditAdvice, "at">, wakeId?: string): ActionSnapshot {
-    if (!this.#auditWriters.has(advice.by)) throw new Error("actor is not authorized to write audit advice");
+    const role = this.#profiles.get(advice.by)?.role;
+    if (!this.#auditWriters.has(advice.by) && role !== "verifier" && role !== "audit") throw new Error("actor is not authorized to write audit advice");
     return this.ledger.putAuditAdvice(id, advice, wakeId);
   }
 
@@ -348,7 +353,7 @@ export class Supervisor {
   }
 
   #loadContext(wake: WakeSnapshot): JsonValue {
-    const role = this.#profiles.get(wake.agent) ?? "child";
+    const role = this.#profiles.get(wake.agent)?.role ?? "child";
     const goals = role === "ceo" ? this.ledger.goals() : this.ledger.goalsForOwner(wake.agent);
     const mail = this.ledger.unreadMail(wake.agent);
     const auditAdvice = this.ledger.unackedAuditAdvice(wake.agent).map((action) => ({ actionId: action.id, advice: action.auditAdvice }));
@@ -368,6 +373,30 @@ export class Supervisor {
   #wake(id: string): WakeSnapshot { const value = this.ledger.wake(id); if (!value) throw new Error(`wake not found: ${id}`); return value; }
   #action(id: string): ActionSnapshot { const value = this.ledger.action(id); if (!value) throw new Error(`action not found: ${id}`); return value; }
   #now(): string { return this.clock.now().toISOString(); }
+
+  async #agentRpc(wake: WakeSnapshot, leaseToken: string, method: AgentCapability, params: JsonValue): Promise<JsonValue> {
+    const current = this.ledger.wake(wake.id);
+    if (!current || current.status !== "running" || current.leaseToken !== leaseToken || !current.leaseUntil || current.leaseUntil < this.#now()) throw new Error("stale runner RPC rejected");
+    const profile = this.#profiles.get(wake.agent) ?? { agent: wake.agent, role: "child" as const };
+    const allowed = new Set(profile.capabilities ?? defaultCapabilities(profile.role));
+    if (!allowed.has(method)) throw new Error(`${profile.role} agent is not allowed to call ${method}`);
+    this.ledger.appendRunnerEvent({ ts: this.#now(), agent: wake.agent, kind: `rpc.${method}`, data: params, wakeId: wake.id }, leaseToken);
+    const input = asRecord(params);
+    if (method === "ledger.search") return this.ledger.searchEvents(String(input.query), Number(input.limit ?? 20)) as unknown as JsonValue;
+    if (method === "budget.read") return (this.ledger.budgetExposure(wake.agent, this.#now()) ?? null) as unknown as JsonValue;
+    if (method === "mail.send") {
+      const mail = { id: randomUUID(), to: String(input.to), from: wake.agent, level: String(input.level) as "fyi" | "decision" | "emergency", body: (input.body ?? null) as JsonValue, readAt: null };
+      this.ledger.putMail(mail, wake.agent, wake.id); return mail as unknown as JsonValue;
+    }
+    if (method === "schedule.set") return (this.planWake(wake.agent, String(input.at), String(input.reason), wake.agent) ?? { scheduled: true }) as unknown as JsonValue;
+    if (method === "audit.ack") return this.ackAuditAdvice(String(input.actionId), wake.agent) as unknown as JsonValue;
+    if (method === "audit.write") return this.putAuditAdvice(String(input.actionId), { by: wake.agent, body: (input.body ?? null) as JsonValue, evidence: numberArray(input.evidence) }, wake.id) as unknown as JsonValue;
+    if (method === "goal.put") { this.ledger.putGoal(input.goal as unknown as GoalSnapshot, wake.agent, wake.id); return input.goal as JsonValue; }
+    const action = await this.submitAction({
+      id: String(input.id), agent: wake.agent, kind: String(input.kind), payload: (input.payload ?? null) as JsonValue, reason: String(input.reason), evidence: numberArray(input.evidence), auditAdvice: null, adviceAcked: false,
+    }, String(input.connector), wake.id);
+    return action as unknown as JsonValue;
+  }
 
   async #collectMetrics(): Promise<void> {
     const now = this.clock.now().getTime();
@@ -462,5 +491,13 @@ function minimalEnvironment(explicit: Record<string, string> = {}): NodeJS.Proce
   return { ...env, ...explicit };
 }
 function escapeHtml(value: string): string { return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"); }
+function asRecord(value: JsonValue): Record<string, JsonValue> { if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("RPC params must be an object"); return value; }
+function numberArray(value: JsonValue | undefined): number[] { if (!Array.isArray(value) || value.some((item) => typeof item !== "number")) throw new Error("RPC evidence must be a number array"); return value as number[]; }
+function defaultCapabilities(role: AgentRole): AgentCapability[] {
+  if (role === "ceo") return ["ledger.search", "budget.read", "mail.send", "schedule.set", "action.submit", "audit.ack", "goal.put"];
+  if (role === "verifier") return ["ledger.search", "mail.send", "audit.write"];
+  if (role === "audit") return ["ledger.search", "mail.send", "audit.write"];
+  return ["ledger.search", "budget.read", "mail.send", "schedule.set", "action.submit", "audit.ack"];
+}
 
 export * from "./verification.js";
