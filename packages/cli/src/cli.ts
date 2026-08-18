@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { discardWorkspaceRef, inspectWorkspaceRef, recoverWorkspaceRef } from "@goah/supervisor";
 import { createRuntime, loadConfig, SupervisorLock, writeDefaultConfig } from "./index.js";
 
 const args = process.argv.slice(2);
@@ -11,7 +12,7 @@ if (command === "init") {
   writeDefaultConfig(configPath);
   console.log(`created ${configPath}`);
 } else if (command === "help") {
-  console.log("goah init|start|status|doctor|goal-list|goal-create|action-list|approve|reject|dashboard");
+  console.log("goah init|start|status|doctor|goal-list|goal-create|action-list|approve|reject|dashboard|workspace-inspect|workspace-recover|workspace-discard");
 } else {
   const config = loadConfig(configPath);
   const { ledger, supervisor } = createRuntime(config);
@@ -34,6 +35,9 @@ if (command === "init") {
     else if (command === "approve") console.log(JSON.stringify(await supervisor.approveAction(requiredPositional(1), option("--actor") ?? "human", required("--reason"), evidence()), null, 2));
     else if (command === "reject") console.log(JSON.stringify(supervisor.rejectAction(requiredPositional(1), option("--actor") ?? "human", required("--reason"), evidence()), null, 2));
     else if (command === "dashboard") { const path = option("--output") ?? join(config.stateDir, "status.html"); writeFileSync(path, (await import("@goah/supervisor")).renderDashboard(ledger)); console.log(path); }
+    else if (command === "workspace-inspect") console.log(inspectWorkspaceRef(config.workspace, requiredPositional(1)));
+    else if (command === "workspace-recover") console.log(recoverWorkspaceRef(config.workspace, requiredPositional(1), required("--branch")));
+    else if (command === "workspace-discard") { if (option("--yes") !== "true") throw new Error("workspace-discard requires --yes true"); discardWorkspaceRef(config.workspace, requiredPositional(1)); console.log("discarded"); }
     else throw new Error(`unknown command: ${command}`);
   } finally { ledger.close(); }
 }

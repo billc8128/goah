@@ -15,6 +15,7 @@ export interface GoahConfig {
   auditWriters?: string[];
   heartbeatPolicies?: Array<{ agent: string; maxSilentMs: number; escalateTo: string; since?: string }>;
   retryPolicy?: { maxAttempts: number; baseDelayMs: number };
+  verifyMetricsAfterWake?: boolean;
   connectors?: Array<{ manifest: ConnectorManifest; command: string; args: string[]; env?: Record<string, string>; timeoutMs?: number }>;
   metrics?: Array<{ goalId: string; intervalMs: number; process: MetricProcessSpec }>;
 }
@@ -45,6 +46,7 @@ export function createRuntime(config: GoahConfig): { ledger: SqliteLedger; super
     ...(config.auditWriters ? { auditWriters: config.auditWriters } : {}),
     ...(config.heartbeatPolicies ? { heartbeatPolicies: config.heartbeatPolicies } : {}),
     ...(config.retryPolicy ? { retryPolicy: config.retryPolicy } : {}),
+    ...(config.verifyMetricsAfterWake !== undefined ? { verifyMetricsAfterWake: config.verifyMetricsAfterWake } : {}),
   });
   for (const connector of config.connectors ?? []) supervisor.registerConnector(connector);
   for (const metric of config.metrics ?? []) supervisor.registerMetricCollector(metric.goalId, metric.process, metric.intervalMs);

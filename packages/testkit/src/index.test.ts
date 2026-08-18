@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { CONTRACT_VERSION, type GoalSnapshot, type WakeSnapshot } from "@goah/ledger-contract";
 import { piWorkerPath, ProcessRunner, verificationWorkerPath } from "@goah/runner-pi";
-import { calibrateVerificationThreshold, evaluateVerification, GitWorkspaceManager, ProcessVerifierModel, renderDashboard, runSupervisorDaemon, Supervisor, VerificationPlane, type VerifierModel } from "@goah/supervisor";
+import { calibrateVerificationThreshold, discardWorkspaceRef, evaluateVerification, GitWorkspaceManager, inspectWorkspaceRef, ProcessVerifierModel, recoverWorkspaceRef, renderDashboard, runSupervisorDaemon, Supervisor, VerificationPlane, type VerifierModel } from "@goah/supervisor";
 import { assertLedgerConformance, createMemoryLedger, fauxRunnerWorkerPath, MockConnector, SimulatedClock } from "./index.js";
 
 const metric = { source: "test", window: "1h", direction: "at_least" as const, target: 1, freshnessMs: 60_000, onMissing: "abnormal" as const, onStale: "wake_owner" as const };
@@ -62,8 +62,9 @@ test("crashed wake keeps emergency mail unread and recovery receives both mail a
   assert.equal(ledger.unreadMail("worker").length, 1);
   const salvage = ledger.events().find((event) => event.kind === "workspace.salvaged");
   assert.ok(salvage);
+  const ref = (salvage.data as { ref: string }).ref;
   assert.equal(existsSync(join(repo, "partial.txt")), false);
-  assert.equal(git(repo, ["show", `${(salvage.data as { ref: string }).ref}:partial.txt`]), "keep");
+  assert.equal(git(repo, ["show", `${ref}:partial.txt`]), "keep");
 
   const recoveryContext = join(mkdtempSync(join(tmpdir(), "goah-context-")), "context.json");
   const recovering = fauxRunner([{ tokens: 5, handoff: { handoff: { observations: [], results: [], nextSteps: [] }, mail: [], nextWakeAt: null } }], recoveryContext);
@@ -74,6 +75,10 @@ test("crashed wake keeps emergency mail unread and recovery receives both mail a
   assert.equal(context.mail.length, 1);
   assert.ok(context.recoveryEvents.length > 0);
   assert.equal(ledger.unreadMail("worker").length, 0);
+  assert.match(inspectWorkspaceRef(repo, ref), /salvage:/);
+  assert.equal(recoverWorkspaceRef(repo, ref, "recovered-work"), "recovered-work");
+  assert.equal(git(repo, ["rev-parse", "recovered-work"]), (salvage.data as { commitSha: string }).commitSha);
+  discardWorkspaceRef(repo, ref);
   ledger.close();
 });
 
@@ -340,6 +345,26 @@ test("process verifier model runs on official Pi core and writes advice", async 
   const model = new ProcessVerifierModel({ command: process.execPath, args: [verificationWorkerPath()], env: { GOAH_PI_PROVIDER: "faux", GOAH_PI_MODEL: "faux-verifier", GOAH_VERIFIER_FAUX_FINDINGS: JSON.stringify([{ actionId: "verify-action", body: { issue: "found" }, evidence: [evidence.seq], riskWeight: 3 }]) } });
   await new VerificationPlane(ledger, supervisor, model).verifySession("verify-wake");
   assert.equal(ledger.unackedAuditAdvice("worker").length, 1);
+  ledger.close();
+});
+
+test("post-wake metric verification closes a failing repo-health loop", async () => {
+  const repo = repository();
+  const healthFile = join(repo, "healthy.txt");
+  const clock = new SimulatedClock();
+  const ledger = createMemoryLedger({ clock });
+  const runner = fauxRunner([{ tokens: 2, write: { path: "healthy.txt", content: "ok\n" } }, { tokens: 1, handoff: { handoff: { observations: ["failed first"], results: ["repaired"], nextSteps: [] }, mail: [], nextWakeAt: null } }]);
+  const supervisor = new Supervisor(ledger, runner, clock, { workspace: new GitWorkspaceManager(repo), verifyMetricsAfterWake: true });
+  supervisor.createGoal({ id: "health", parentId: null, objective: "keep healthy", owner: "worker", target: 1, budget: null, phase: "active", revision: 0, metric: { source: "repo.health", window: "latest", direction: "at_least", target: 1, freshnessMs: 10_000, onMissing: "wake_owner", onStale: "wake_owner" } });
+  supervisor.registerMetricCollector("health", {
+    command: process.execPath,
+    args: ["-e", "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const r=JSON.parse(s);const fs=require('fs');process.stdout.write(JSON.stringify({goalId:r.goalId,source:'repo.health',observedAt:new Date().toISOString(),value:fs.existsSync(process.env.GOAH_HEALTH_FILE)?1:0}))})"],
+    env: { GOAH_HEALTH_FILE: healthFile },
+  }, 60_000);
+  const completed = await supervisor.runAvailable(1, 5);
+  assert.equal(completed.length, 1);
+  assert.deepEqual(ledger.metricSamples("health").map((sample) => sample.value), [0, 1]);
+  assert.equal(readFileSync(join(repo, "healthy.txt"), "utf8"), "ok\n");
   ledger.close();
 });
 

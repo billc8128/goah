@@ -41,6 +41,7 @@ Implemented and tested today:
 - Concurrent child agents, CEO global context, serialized artifact merges, resident daemon loop, and a static read-only dashboard
 - Session verifier plus blind-first global audit interfaces, audit-advice delivery, and precision/risk-weighted-recall evaluation
 - Repo-guardian reference application, systemd/launchd templates, and an accelerated 30-day replay/continuity soak
+- Bidirectional fenced RPC with role capabilities, executable CEO/verifier/audit prompts, versioned configuration, singleton CLI controls, and workspace-ref recovery
 
 Operational acceptance evidence **not yet produced**:
 
@@ -58,6 +59,16 @@ npm test          # contract, transaction-fault, process-recovery, merge, approv
 npm run example   # one full wake: goal → schedule → lease → faux run → handoff → git merge → done
 npm run example:guardian
 npm run test:soak
+```
+
+Initialize and operate a configured supervisor:
+
+```bash
+npx goah init
+npx goah doctor
+npx goah start
+npx goah status
+npx goah approve <action-id> --reason "approved" --evidence 12,18
 ```
 
 The example runs entirely offline: a simulated clock, an in-memory ledger, a faux driver instead of a real model, and a throwaway git repo. No API keys are involved anywhere in this codebase.
@@ -111,6 +122,7 @@ requested ─▶ approved ─▶ dispatching ─▶ confirmed
 | `@goah/supervisor` | contract | Scheduler, wake lifecycle, action gate, connector dispatch, git workspace manager. Never executes user code in-process. |
 | `@goah/runner-pi` | contract | Worker-side Pi adapter plus supervisor-side `ProcessRunner`: IPC, timeout termination, handoff reserve, and trace forwarding. |
 | `@goah/testkit` | all of the above | Simulated clock, faux process worker, isolated mock connector, public ledger conformance suite, and fault injection. |
+| `@goah/cli` | contract, SQLite, runner, supervisor | Versioned config, singleton daemon, status/doctor, goals, approvals, dashboard, and recovery refs. |
 
 ## Security model
 

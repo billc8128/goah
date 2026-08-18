@@ -126,6 +126,7 @@ export interface SupervisorOptions {
   heartbeatPolicies?: Array<{ agent: string; maxSilentMs: number; escalateTo: string; since?: string }>;
   retryPolicy?: { maxAttempts: number; baseDelayMs: number };
   profiles?: AgentProfile[];
+  verifyMetricsAfterWake?: boolean;
 }
 
 interface MetricCollectorRegistration { goalId: string; spec: MetricProcessSpec; intervalMs: number; nextAt: number }
@@ -144,6 +145,7 @@ export class Supervisor {
   readonly #heartbeatPolicies: NonNullable<SupervisorOptions["heartbeatPolicies"]>;
   readonly #retryPolicy: NonNullable<SupervisorOptions["retryPolicy"]>;
   readonly #profiles: Map<string, AgentProfile>;
+  readonly #verifyMetricsAfterWake: boolean;
 
   constructor(readonly ledger: Ledger, readonly runner: Runner, readonly clock: Clock, options: SupervisorOptions = {}) {
     this.#limits = options.limits ?? defaultLimits;
@@ -155,6 +157,7 @@ export class Supervisor {
     this.#heartbeatPolicies = options.heartbeatPolicies ?? [];
     this.#retryPolicy = options.retryPolicy ?? { maxAttempts: 0, baseDelayMs: 1_000 };
     this.#profiles = new Map((options.profiles ?? []).map((profile) => [profile.agent, profile]));
+    this.#verifyMetricsAfterWake = options.verifyMetricsAfterWake ?? false;
   }
 
   registerConnector(connector: ConnectorProcessSpec): void { this.#connectors.set(connector.manifest.connector, connector); }
@@ -228,6 +231,9 @@ export class Supervisor {
         if (workspace) this.#workspaceEvent("workspace.merged", running, workspace);
         this.ledger.finishWake(running.id, "done", this.#now());
       }
+      if (this.#verifyMetricsAfterWake) {
+        for (const goal of this.ledger.goalsForOwner(running.agent)) if (this.#metricCollectors.has(goal.id)) await this.collectMetricNow(goal.id);
+      }
       return this.#wake(running.id);
     } catch (error) {
       if (handle) await handle.terminate();
@@ -236,13 +242,13 @@ export class Supervisor {
     }
   }
 
-  async runAvailable(concurrency = 4): Promise<WakeSnapshot[]> {
+  async runAvailable(concurrency = 4, maxWakes = 100): Promise<WakeSnapshot[]> {
     const completed: WakeSnapshot[] = [];
     while (true) {
       const batch = await Promise.all(Array.from({ length: concurrency }, () => this.tick()));
       const wakes = batch.filter((wake): wake is WakeSnapshot => wake !== null);
       completed.push(...wakes);
-      if (wakes.length === 0) return completed;
+      if (wakes.length === 0 || completed.length >= maxWakes) return completed;
     }
   }
 
@@ -287,6 +293,14 @@ export class Supervisor {
     this.ledger.appendEvent({ ts: this.#now(), agent: "supervisor", kind: "metric.evaluated", data: evaluation as unknown as JsonValue, wakeId: null });
     if (evaluation.shouldWakeOwner) this.#enqueueTrigger(goal.owner, `metric:${goal.id}:${sample.observedAt}`);
     return evaluation;
+  }
+
+  async collectMetricNow(goalId: string): Promise<MetricEvaluation> {
+    const registration = this.#metricCollectors.get(goalId);
+    if (!registration) throw new Error(`metric collector is not registered: ${goalId}`);
+    registration.nextAt = this.clock.now().getTime() + registration.intervalMs;
+    const sample = await runJsonProcess<MetricSample>(registration.spec, { goalId });
+    return this.recordMetric({ ...sample, goalId });
   }
 
   async reconcileAction(id: string): Promise<ActionSnapshot> {
@@ -445,6 +459,23 @@ export function renderDashboard(ledger: Ledger): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>goah status</title><style>body{font:14px ui-monospace;margin:32px;background:#101418;color:#dce3e4}section{margin:32px 0}pre{white-space:pre-wrap;border:1px solid #334;padding:12px}</style></head><body><h1>goah</h1><p>seq ${ledger.events().at(-1)?.seq ?? 0}</p><section><h2>Goals</h2><table>${rows(ledger.goals())}</table></section><section><h2>Wakes</h2><table>${rows(ledger.wakes())}</table></section><section><h2>Actions</h2><table>${rows(ledger.actions())}</table></section><section><h2>Mailbox</h2><table>${rows(ledger.mailbox())}</table></section></body></html>`;
 }
 
+export function inspectWorkspaceRef(repository: string, ref: string): string {
+  assertGoahRef(ref);
+  return git(repository, ["show", "--stat", "--oneline", ref]);
+}
+
+export function recoverWorkspaceRef(repository: string, ref: string, branch: string): string {
+  assertGoahRef(ref);
+  if (!/^[-A-Za-z0-9._/]+$/.test(branch)) throw new Error("invalid recovery branch name");
+  git(repository, ["branch", branch, ref]);
+  return branch;
+}
+
+export function discardWorkspaceRef(repository: string, ref: string): void {
+  assertGoahRef(ref);
+  git(repository, ["update-ref", "-d", ref]);
+}
+
 async function runConnector<T>(spec: ConnectorProcessSpec, operation: "dispatch" | "query", action: ActionSnapshot): Promise<T> {
   return runJsonProcess<T>(spec, { operation, action });
 }
@@ -492,6 +523,7 @@ function minimalEnvironment(explicit: Record<string, string> = {}): NodeJS.Proce
   return { ...env, ...explicit };
 }
 function escapeHtml(value: string): string { return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"); }
+function assertGoahRef(ref: string): void { if (!ref.startsWith("refs/goah/salvage/") && !ref.startsWith("refs/goah/merge-blocked/")) throw new Error("only goah recovery refs are allowed"); }
 function asRecord(value: JsonValue): Record<string, JsonValue> { if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("RPC params must be an object"); return value; }
 function numberArray(value: JsonValue | undefined): number[] { if (!Array.isArray(value) || value.some((item) => typeof item !== "number")) throw new Error("RPC evidence must be a number array"); return value as number[]; }
 function defaultCapabilities(role: AgentRole): AgentCapability[] {
