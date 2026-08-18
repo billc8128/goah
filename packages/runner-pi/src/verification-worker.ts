@@ -2,9 +2,8 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { Agent, type AgentTool } from "@earendil-works/pi-agent-core";
-import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, Type, type Api, type Model } from "@earendil-works/pi-ai";
-import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
-import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
+import { fauxAssistantMessage, fauxToolCall, Type } from "@earendil-works/pi-ai";
+import { createPiModel, providerApiKey } from "./model-provider.js";
 interface VerificationResult { findings: Array<{ actionId: string; body: unknown; evidence: number[]; riskWeight: number }>; tokensUsed: number }
 
 export async function runVerificationWorker(): Promise<void> {
@@ -14,17 +13,13 @@ export async function runVerificationWorker(): Promise<void> {
     const provider = process.env.GOAH_PI_PROVIDER ?? "anthropic";
     const modelId = process.env.GOAH_PI_MODEL;
     if (!modelId) throw new Error("GOAH_PI_MODEL is required");
-    const models = createModels();
-    let model: Model<Api> | undefined;
-    if (provider === "anthropic") { models.setProvider(anthropicProvider()); model = models.getModel(provider, modelId); }
-    else if (provider === "openai") { models.setProvider(openaiProvider()); model = models.getModel(provider, modelId); }
-    else if (provider === "faux") {
-      const faux = fauxProvider({ provider: "faux", models: [{ id: modelId }] });
+    const configured = createPiModel(provider, modelId);
+    const { models, model } = configured;
+    if (provider === "faux") {
+      const faux = configured.faux!;
       const findings = JSON.parse(process.env.GOAH_VERIFIER_FAUX_FINDINGS ?? "[]");
       faux.setResponses([fauxAssistantMessage(fauxToolCall("report_findings", { findings }), { stopReason: "toolUse" })]);
-      models.setProvider(faux.provider); model = faux.getModel() as Model<Api>;
-    } else throw new Error(`unsupported verifier provider: ${provider}`);
-    if (!model) throw new Error(`verifier model not found: ${provider}/${modelId}`);
+    }
 
     let result: VerificationResult | null = null;
     let tokensUsed = 0;
@@ -38,7 +33,7 @@ export async function runVerificationWorker(): Promise<void> {
       : request.operation === "reason_audit"
         ? "Compare already-audited facts against revealed action reasons. Identify unsupported claims or omitted counterevidence."
         : "Verify the handoff against trace facts and action evidence. Never trust self-report without support.";
-    const agent = new Agent({ initialState: { systemPrompt: `${systemPrompt} You must call report_findings exactly once.`, model, tools: [tool] }, streamFn: models.streamSimple.bind(models), getApiKey: (id) => id === "anthropic" ? process.env.ANTHROPIC_API_KEY : id === "openai" ? process.env.OPENAI_API_KEY : undefined, shouldStopAfterTurn: () => result !== null });
+    const agent = new Agent({ initialState: { systemPrompt: `${systemPrompt} You must call report_findings exactly once.`, model, tools: [tool] }, streamFn: models.streamSimple.bind(models), getApiKey: providerApiKey, shouldStopAfterTurn: () => result !== null });
     agent.subscribe((event) => { if (event.type === "message_end" && event.message.role === "assistant") tokensUsed += event.message.usage.totalTokens; });
     await agent.prompt(JSON.stringify(request.input));
     const finalResult = result as VerificationResult | null;

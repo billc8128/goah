@@ -4,11 +4,10 @@ import { dirname, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { Agent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
-import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, Type, type Message, type Model, type Api } from "@earendil-works/pi-ai";
-import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
-import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
+import { fauxAssistantMessage, fauxToolCall, Type, type Message } from "@earendil-works/pi-ai";
 import type { AgentCapability, JsonValue, RunnerResult, WakeOutput } from "@goah/ledger-contract";
 import { runProcessWorker, type WorkerRpc } from "./index.js";
+import { createPiModel, providerApiKey } from "./model-provider.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -28,24 +27,19 @@ export async function runPiWorker(): Promise<void> {
     const provider = process.env.GOAH_PI_PROVIDER ?? "anthropic";
     const modelId = process.env.GOAH_PI_MODEL;
     if (!modelId) throw new Error("GOAH_PI_MODEL is required");
-    const models = createModels();
-    let model: Model<Api> | undefined;
-    if (provider === "anthropic") { models.setProvider(anthropicProvider()); model = models.getModel(provider, modelId); }
-    else if (provider === "openai") { models.setProvider(openaiProvider()); model = models.getModel(provider, modelId); }
-    else if (provider === "faux") {
-      const faux = fauxProvider({ provider: "faux", models: [{ id: modelId }] });
+    const configured = createPiModel(provider, modelId);
+    const { models, model } = configured;
+    if (provider === "faux") {
+      const faux = configured.faux!;
       const handoff = JSON.parse(process.env.GOAH_PI_FAUX_HANDOFF ?? "{}") as Record<string, unknown>;
       faux.setResponses([fauxAssistantMessage(fauxToolCall("handoff", handoff), { stopReason: "toolUse" })]);
-      models.setProvider(faux.provider);
-      model = faux.getModel() as Model<Api>;
-    } else throw new Error(`unsupported GOAH Pi provider: ${provider}`);
-    if (!model) throw new Error(`Pi model not found: ${provider}/${modelId}`);
+    }
 
     let output: WakeOutput | null = null;
     let tokensUsed = 0;
     let compactions = 0;
     const workspace = request.workspacePath ? resolve(request.workspacePath) : undefined;
-    const tools = createTools(workspace, (value) => { output = value; }, process.env.GOAH_PI_ALLOW_BASH === "true", rpc);
+    const tools = createTools(workspace, (value) => { output = value; }, process.env.GOAH_PI_ALLOW_BASH === "true", rpc, request.wake.startedAt);
     const compactAt = Number(process.env.GOAH_PI_COMPACT_AT_TOKENS ?? Math.floor(request.limits.maxTokens * 0.6));
     const suppliedPrompt = typeof request.context === "object" && request.context !== null && !Array.isArray(request.context) && typeof request.context.systemPrompt === "string" ? request.context.systemPrompt : undefined;
     const agent = new Agent({
@@ -57,10 +51,18 @@ export async function runPiWorker(): Promise<void> {
       streamFn: models.streamSimple.bind(models),
       getApiKey: (id) => providerApiKey(id),
       transformContext: async (messages) => {
-        if (estimateMessages(messages) < compactAt) return messages;
-        compactions += 1;
-        emit({ kind: "context.compacted", data: { compaction: compactions, sourceMessageCount: messages.length } });
-        return compactMessages(messages);
+        let view = messages;
+        if (estimateMessages(messages) >= compactAt) {
+          compactions += 1;
+          emit({ kind: "context.compacted", data: { compaction: compactions, sourceMessageCount: messages.length } });
+          view = compactMessages(messages);
+        }
+        if (tokensUsed < request.limits.maxTokens - request.limits.handoffReserveTokens) return view;
+        return [...view, {
+          role: "user",
+          content: "Handoff reserve is active. Do not call any other tool. Call handoff now with the best verified state available.",
+          timestamp: Date.now(),
+        }];
       },
       beforeToolCall: async ({ toolCall }) => {
         const reserve = tokensUsed >= request.limits.maxTokens - request.limits.handoffReserveTokens;
@@ -74,13 +76,13 @@ export async function runPiWorker(): Promise<void> {
       if (event.type === "message_end" && event.message.role === "assistant") tokensUsed += event.message.usage.totalTokens;
       emit({ kind: `pi.${event.type}`, data: JSON.parse(JSON.stringify(event)) as JsonValue });
     });
-    await agent.prompt(`Wake context:\n${JSON.stringify(request.context)}\n\nWork in: ${workspace ?? "no workspace"}`);
+    await agent.prompt(`Wake started at: ${request.wake.startedAt ?? "unknown"}\nWake context:\n${JSON.stringify(request.context)}\n\nWork in: ${workspace ?? "no workspace"}`);
     if (!output) return { outcome: "abnormal", reason: "Pi worker exited without a valid handoff", tokensUsed };
     return { outcome: "handoff", output, tokensUsed };
   });
 }
 
-function createTools(workspace: string | undefined, handoff: (output: WakeOutput) => void, allowBash: boolean, rpc: WorkerRpc): AgentTool<any>[] {
+function createTools(workspace: string | undefined, handoff: (output: WakeOutput) => void, allowBash: boolean, rpc: WorkerRpc, wakeStartedAt: string | null): AgentTool<any>[] {
   const handoffTool: AgentTool<any> = {
     name: "handoff",
     label: "Handoff",
@@ -94,7 +96,7 @@ function createTools(workspace: string | undefined, handoff: (output: WakeOutput
     }),
     execute: async (_id, params) => {
       const input = params as { observations: string[]; results: string[]; nextSteps: string[]; blocker?: string; nextWakeAt?: string };
-      const value: WakeOutput = { handoff: { observations: input.observations, results: input.results, nextSteps: input.nextSteps, ...(input.blocker ? { blocker: input.blocker } : {}) }, mail: [], nextWakeAt: input.nextWakeAt ?? null };
+      const value: WakeOutput = { handoff: { observations: input.observations, results: input.results, nextSteps: input.nextSteps, ...(input.blocker ? { blocker: input.blocker } : {}) }, mail: [], nextWakeAt: validateNextWakeAt(input.nextWakeAt, wakeStartedAt) };
       handoff(value);
       return { content: [{ type: "text", text: "handoff recorded" }], details: value, terminate: true };
     },
@@ -129,6 +131,14 @@ function createTools(workspace: string | undefined, handoff: (output: WakeOutput
   return [readTool, writeTool, noteTool, bashTool, ...rpcTools, handoffTool];
 }
 
+export function validateNextWakeAt(value: string | undefined, wakeStartedAt: string | null): string | null {
+  if (value === undefined) return null;
+  const next = Date.parse(value);
+  const started = wakeStartedAt === null ? Number.NaN : Date.parse(wakeStartedAt);
+  if (!Number.isFinite(next) || !Number.isFinite(started) || next <= started) throw new Error("nextWakeAt must be a valid time later than the current wake start");
+  return new Date(next).toISOString();
+}
+
 function createRpcTools(rpc: WorkerRpc): AgentTool<any>[] {
   const tool = (name: string, description: string, method: AgentCapability, parameters: ReturnType<typeof Type.Object>): AgentTool<any> => ({
     name, label: name, description, parameters,
@@ -158,10 +168,4 @@ function messageText(message: AgentMessage): string {
   if (value.role === "assistant") return value.content.map((item) => item.type === "text" ? item.text : item.type === "thinking" ? item.thinking : `[tool:${item.name}]`).join(" ");
   return value.content.map((item) => item.type === "text" ? item.text : "[image]").join(" ");
 }
-function providerApiKey(provider: string): string | undefined {
-  if (provider === "anthropic") return process.env.ANTHROPIC_API_KEY;
-  if (provider === "openai") return process.env.OPENAI_API_KEY;
-  return undefined;
-}
-
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) await runPiWorker();
