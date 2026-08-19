@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -53,7 +53,7 @@ export async function runPiWorker(): Promise<void> {
     const capabilities = Array.isArray(contextRecord.capabilities)
       ? new Set(contextRecord.capabilities.filter((value): value is AgentCapability => typeof value === "string"))
       : undefined;
-    const tools = createTools(root, (value) => { output = value; }, process.env.GOAH_PI_ALLOW_BASH === "true", rpc, request.wake.startedAt, capabilities);
+    const tools = createTools(root, (value) => { output = value; }, rpc, request.wake.startedAt, capabilities);
     const contextPolicy = resolveContextPolicy(model.contextWindow, process.env);
     emit({ type: "session.started", data: { formatVersion: SESSION_FORMAT_VERSION, provider, model: modelId, runner: "pi", contextWindowTokens: model.contextWindow, maxOutputTokensPerTurn: model.maxTokens } });
     const suppliedPrompt = typeof contextRecord.systemPrompt === "string" ? contextRecord.systemPrompt : undefined;
@@ -137,7 +137,7 @@ function sessionMessage(message: AgentMessage, id: string): SessionMessage {
   return { id, role, content: (value.content ?? value) as JsonValue, ...(value.usage !== undefined ? { usage: value.usage as JsonValue } : {}) };
 }
 
-function createTools(root: string, handoff: (output: WakeOutput) => void, allowBash: boolean, rpc: WorkerRpc, wakeStartedAt: string | null, capabilities?: ReadonlySet<AgentCapability>): AgentTool<any>[] {
+function createTools(root: string, handoff: (output: WakeOutput) => void, rpc: WorkerRpc, wakeStartedAt: string | null, capabilities?: ReadonlySet<AgentCapability>): AgentTool<any>[] {
   const handoffTool: AgentTool<any> = {
     name: "handoff",
     label: "Handoff",
@@ -159,31 +159,39 @@ function createTools(root: string, handoff: (output: WakeOutput) => void, allowB
   };
   const rpcTools = createRpcTools(rpc, capabilities);
   const readTool: AgentTool<any> = {
-    name: "read_file", label: "Read file", description: "Read a UTF-8 file inside the local runner root.",
+    name: "read", label: "Read", description: "Read a UTF-8 file inside the current working directory.",
     parameters: Type.Object({ path: Type.String() }),
     execute: async (_id, params) => { const input = params as { path: string }; return { content: [{ type: "text", text: await readFile(scoped(root, input.path), "utf8") }], details: {} }; },
   };
   const writeTool: AgentTool<any> = {
-    name: "write_file", label: "Write file", description: "Write a UTF-8 file inside the local runner root.",
+    name: "write", label: "Write", description: "Create or replace a UTF-8 file inside the current working directory.",
     parameters: Type.Object({ path: Type.String(), content: Type.String() }),
     execute: async (_id, params) => { const input = params as { path: string; content: string }; const path = scoped(root, input.path); await mkdir(dirname(path), { recursive: true }); await writeFile(path, input.content); return { content: [{ type: "text", text: "written" }], details: {} }; },
   };
-  const noteTool: AgentTool<any> = {
-    name: "record_note", label: "Record note", description: "Append a durable runner note. The tool result is also indexed in the ledger trace.",
-    parameters: Type.Object({ note: Type.String() }),
-    execute: async (_id, params) => { const input = params as { note: string }; await appendFile(scoped(root, ".goah-notes.md"), `${input.note}\n`); return { content: [{ type: "text", text: "note recorded" }], details: { note: input.note } }; },
+  const editTool: AgentTool<any> = {
+    name: "edit", label: "Edit", description: "Replace one exact text occurrence in a UTF-8 file inside the current working directory.",
+    parameters: Type.Object({ path: Type.String(), oldText: Type.String(), newText: Type.String() }),
+    execute: async (_id, params) => {
+      const input = params as { path: string; oldText: string; newText: string };
+      const path = scoped(root, input.path);
+      const source = await readFile(path, "utf8");
+      const first = source.indexOf(input.oldText);
+      if (first < 0) throw new Error("edit oldText was not found");
+      if (source.indexOf(input.oldText, first + input.oldText.length) >= 0) throw new Error("edit oldText is not unique");
+      await writeFile(path, `${source.slice(0, first)}${input.newText}${source.slice(first + input.oldText.length)}`);
+      return { content: [{ type: "text", text: "edited" }], details: { path: input.path } };
+    },
   };
-  if (!allowBash) return [readTool, writeTool, noteTool, ...rpcTools, handoffTool];
   const bashTool: AgentTool<any> = {
     name: "bash", label: "Bash", description: "Run a shell command inside the local runner root.",
     parameters: Type.Object({ command: Type.String() }), executionMode: "sequential",
     execute: async (_id, params, signal) => {
       const input = params as { command: string };
-      const result = await execFileAsync("/bin/sh", ["-lc", input.command], { cwd: root, signal, maxBuffer: 1_000_000 });
+      const result = await execFileAsync("/bin/sh", ["-lc", input.command], { cwd: root, env: toolEnvironment(), signal, maxBuffer: 1_000_000 });
       return { content: [{ type: "text", text: `${result.stdout}${result.stderr}`.slice(-50_000) }], details: { command: input.command } };
     },
   };
-  return [readTool, writeTool, noteTool, bashTool, ...rpcTools, handoffTool];
+  return [readTool, writeTool, editTool, bashTool, ...rpcTools, handoffTool];
 }
 
 export function validateNextWakeAt(value: string | undefined, wakeStartedAt: string | null): string | null {
@@ -243,12 +251,13 @@ function createRpcTools(rpc: WorkerRpc, allowed?: ReadonlySet<AgentCapability>):
     ["audit.ack", tool("ack_audit_advice", "Acknowledge audit advice after incorporating it.", "audit.ack", Type.Object({ actionId: Type.String() }))],
     ["audit.write", tool("write_audit_advice", "Write audit advice for an action.", "audit.write", Type.Object({ actionId: Type.String(), body: Type.Any(), evidence: Type.Array(Type.Number()) }))],
     ["team.list", tool("team_list", "Read the ledger-derived team roster and liveness state.", "team.list", Type.Object({}))],
-    ["goal.delegate", tool("delegate_goal", "Atomically create a child goal, send its decision brief, and queue its owner.", "goal.delegate", Type.Object({ id: Type.String(), parentGoalId: Type.String(), childGoal: Type.Object({ id: Type.String(), objective: Type.String(), owner: Type.String() }), brief: Type.Any(), reason: Type.String(), evidence: Type.Array(Type.Number()) }))],
+    ["goal.delegate", tool("delegate_goal", "Atomically create a child goal with an observation method, send its decision brief, and queue its owner.", "goal.delegate", Type.Object({ id: Type.String(), parentGoalId: Type.String(), childGoal: Type.Object({ id: Type.String(), objective: Type.String(), observationMethod: Type.String(), owner: Type.String() }), brief: Type.Any(), reason: Type.String(), evidence: Type.Array(Type.Number()) }))],
     ["goal.reassign", tool("reassign_goal", "Atomically transfer a child goal, notify both owners, and queue the new owner.", "goal.reassign", Type.Object({ id: Type.String(), goalId: Type.String(), newOwner: Type.String(), brief: Type.Any(), reason: Type.String(), evidence: Type.Array(Type.Number()) }))],
+    ["goal.revise", tool("revise_goal", "Revise a child objective and observation method as one new revision.", "goal.revise", Type.Object({ goalId: Type.String(), objective: Type.String(), observationMethod: Type.String(), reason: Type.String(), evidence: Type.Array(Type.Number()) }))],
     ["goal.pause", tool("pause_goal", "Pause a child goal and suppress queued motion.", "goal.pause", Type.Object({ goalId: Type.String() }))],
     ["goal.resume", tool("resume_goal", "Resume a child goal and ensure its owner is queued.", "goal.resume", Type.Object({ goalId: Type.String() }))],
-    ["goal.complete", tool("complete_goal", "Complete a child goal. Root completion remains human authority.", "goal.complete", Type.Object({ goalId: Type.String() }))],
-    ["human.request", tool("request_human", "Ask the human for a decision or recommend root completion with evidence.", "human.request", Type.Object({ type: Type.Union([Type.Literal("decision"), Type.Literal("completion_recommendation")]), message: Type.Any(), evidence: Type.Array(Type.Number()) }))],
+    ["goal.complete", tool("complete_goal", "Complete a child goal with evidence produced under its current observation method. Root completion remains human authority.", "goal.complete", Type.Object({ goalId: Type.String(), revision: Type.Number(), reason: Type.String(), evidence: Type.Array(Type.Number()) }))],
+    ["human.request", tool("request_human", "Ask the human for a decision, observation-method confirmation, or root completion with evidence.", "human.request", Type.Object({ type: Type.Union([Type.Literal("decision"), Type.Literal("observation_method_confirmation"), Type.Literal("completion_recommendation")]), message: Type.Any(), evidence: Type.Array(Type.Number()) }))],
     ["goal.put", tool("put_goal", "Create or update a goal using parent-layer authority.", "goal.put", Type.Object({ goal: Type.Any() }))],
   ];
   return definitions.filter(([capability]) => !allowed || allowed.has(capability)).map(([, value]) => value);
@@ -258,6 +267,11 @@ function scoped(root: string, path: string): string {
   const resolved = resolve(root, path);
   if (resolved !== root && !resolved.startsWith(`${root}${sep}`)) throw new Error("path escapes runner root");
   return resolved;
+}
+function toolEnvironment(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const name of ["PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "SHELL", "TERM", "USER"]) if (process.env[name] !== undefined) env[name] = process.env[name];
+  return env;
 }
 function estimateMessages(messages: AgentMessage[]): number { return Math.ceil(JSON.stringify(messages).length / 4); }
 function integerSetting(value: string | undefined, fallback: number): number {
