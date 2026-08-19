@@ -4,7 +4,7 @@ import type { MetricSample } from "./metrics.js";
 export type WakeStatus = "queued" | "leased" | "running" | "done" | "abnormal" | "merge_blocked";
 export type ActionStatus = "requested" | "approved" | "dispatching" | "confirmed" | "failed" | "unknown";
 export type GoalPhase = "active" | "paused" | "blocked" | "complete";
-export interface GoalSnapshot { id: string; parentId: string | null; objective: string; owner: string; phase: GoalPhase; revision: number }
+export interface GoalSnapshot { id: string; parentId: string | null; objective: string; observationMethod: string | null; owner: string; phase: GoalPhase; revision: number }
 export interface ScheduleSnapshot { id: string; agent: string; nextWakeAt: string; reason: string; setBy: string }
 export interface WakeSnapshot { id: string; agent: string; triggerRef: string; status: WakeStatus; leaseUntil: string | null; attempt: number; startedAt: string | null; endedAt: string | null; enqueuedSeq: number; leaseToken: string | null; runnerPid: number | null }
 export type MailLevel = "fyi" | "decision" | "emergency";
@@ -12,7 +12,7 @@ export interface MailSnapshot { id: string; to: string; from: string; level: Mai
 export interface DelegationRequest {
   id: string;
   parentGoalId: string;
-  childGoal: { id: string; objective: string; owner: string };
+  childGoal: { id: string; objective: string; observationMethod: string; owner: string };
   brief: JsonValue;
   reason: string;
   evidence: number[];
@@ -27,6 +27,7 @@ export interface ReassignmentRequest {
   evidence: number[];
 }
 export interface ReassignmentResult { reassignmentId: string; goal: GoalSnapshot; mail: MailSnapshot[]; wake: WakeSnapshot }
+export interface GoalCompletionRequest { goalId: string; revision: number; reason: string; evidence: number[] }
 export type TeamMemberStatus = "running" | "queued" | "scheduled" | "waiting" | "blocked" | "idle_unplanned" | "retired";
 export interface TeamMemberView {
   agent: string;
@@ -45,7 +46,7 @@ export interface RunnerTraceEvent { type: string; data: JsonValue }
 
 export type AgentRole = "child" | "ceo" | "verifier" | "audit";
 export type AgentCapability = "ledger.search" | "mail.send" | "schedule.set" | "action.submit" | "audit.ack" | "audit.write" | "goal.put"
-  | "team.list" | "goal.delegate" | "goal.reassign" | "goal.pause" | "goal.resume" | "goal.complete" | "human.request";
+  | "team.list" | "goal.delegate" | "goal.reassign" | "goal.revise" | "goal.pause" | "goal.resume" | "goal.complete" | "human.request";
 export interface AgentProfile { agent: string; role: AgentRole; capabilities?: AgentCapability[]; systemPrompt?: string }
 export interface RunRequest { wake: WakeSnapshot; context: JsonValue; now(): string; emit(event: RunnerTraceEvent): void; rpc?(method: AgentCapability, params: JsonValue): Promise<JsonValue> }
 export type RunnerResult = { outcome: "handoff"; output: WakeOutput } | { outcome: "abnormal"; reason: string };
@@ -64,6 +65,7 @@ export interface Ledger extends EventStore {
   putGoal(goal: GoalSnapshot, actor: string, wakeId?: string): EventRecord;
   commitDelegation(request: DelegationRequest, actor: string, wakeId?: string): DelegationResult;
   commitReassignment(request: ReassignmentRequest, actor: string, wakeId?: string): ReassignmentResult;
+  completeGoal(request: GoalCompletionRequest, actor: string, wakeId?: string): GoalSnapshot;
   putSchedule(schedule: ScheduleSnapshot, actor: string, wakeId?: string): EventRecord;
   enqueueWake(wake: WakeSnapshot, actor: string): { event: EventRecord; created: boolean };
   claimNextWake(now: string, leaseUntil: string, leaseToken: string): WakeSnapshot | null;
@@ -114,5 +116,10 @@ export function assertActionTransition(from: ActionStatus, to: ActionStatus): vo
 export function assertGoalTransition(from: GoalPhase, to: GoalPhase): void { if (from !== to && !goalTransitions[from].includes(to)) throw new Error(`invalid goal transition: ${from} -> ${to}`); }
 export function assertHandoff(value: Handoff): void { if (!Array.isArray(value.observations) || !Array.isArray(value.results) || !Array.isArray(value.nextSteps)) throw new Error("invalid handoff: observations, results and nextSteps are required arrays"); }
 export function assertActionRequest(value: ActionSnapshot): void { if (!value.reason.trim()) throw new Error("action reason is required"); if (value.evidence.length === 0) throw new Error("action evidence is required"); if (value.status !== "requested") throw new Error("new action must be requested"); if (!value.connector.trim()) throw new Error("action connector is required"); if (value.reconciledAt !== null) throw new Error("requested action cannot be reconciled"); }
-export function assertGoalSnapshot(value: GoalSnapshot): void { if (!value.objective.trim() || !value.owner.trim()) throw new Error("goal objective and owner are required"); if (!["active", "paused", "blocked", "complete"].includes(value.phase)) throw new Error(`invalid goal phase: ${value.phase}`); }
+export function assertGoalSnapshot(value: GoalSnapshot): void {
+  if (!value.objective.trim() || !value.owner.trim()) throw new Error("goal objective and owner are required");
+  if (value.observationMethod !== null && !value.observationMethod.trim()) throw new Error("goal observation method cannot be blank");
+  if (value.parentId !== null && value.observationMethod === null) throw new Error("child goal observation method is required");
+  if (!["active", "paused", "blocked", "complete"].includes(value.phase)) throw new Error(`invalid goal phase: ${value.phase}`);
+}
 export function capabilityFor(manifest: ConnectorManifest, kind: string): ConnectorCapability | null { return manifest.capabilities.find((capability) => capability.kind === kind) ?? null; }
