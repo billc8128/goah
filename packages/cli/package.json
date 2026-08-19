@@ -22,18 +22,37 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./kernel": "./dist/kernel.js",
+    "./session": "./dist/session.js",
+    "./execution": "./dist/execution.js",
+    "./metrics": "./dist/metrics.js",
+    "./sqlite": "./dist/sqlite.js",
+    "./supervisor": "./dist/supervisor.js",
+    "./runner-pi": "./dist/runner-pi.js",
+    "./testkit": "./dist/testkit.js"
   },
   "bin": {
     "goah": "dist/cli.js"
   },
   "scripts": {
-    "prepack": "node -e \"require('node:fs').chmodSync('dist/cli.js', 0o755)\""
+    "prepack": "node ../../scripts/prepare-single-package.mjs",
+    "postpack": "node ../../scripts/cleanup-single-package.mjs"
   },
   "dependencies": {
     "goah-ledger-contract": "0.3.0",
     "goah-ledger-sqlite": "0.3.0",
     "goah-runner-pi": "0.3.0",
-    "goah-supervisor": "0.3.0"
-  }
+    "goah-supervisor": "0.3.0",
+    "goah-testkit": "0.3.0",
+    "@earendil-works/pi-agent-core": "0.84.2",
+    "@earendil-works/pi-ai": "0.84.2"
+  },
+  "bundledDependencies": [
+    "goah-ledger-contract",
+    "goah-ledger-sqlite",
+    "goah-runner-pi",
+    "goah-supervisor",
+    "goah-testkit"
+  ]
 }

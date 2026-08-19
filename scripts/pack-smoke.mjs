@@ -9,21 +9,20 @@ const artifacts = join(temp, "artifacts");
 const app = join(temp, "app");
 mkdirSync(artifacts); mkdirSync(app);
 
-const workspaces = [
-  "packages/ledger-contract",
-  "packages/ledger-sqlite",
-  "packages/runner-pi",
-  "packages/supervisor",
-  "packages/testkit",
-  "packages/cli",
-];
-const tarballs = workspaces.map((workspace) => {
-  const packed = JSON.parse(execFileSync("npm", ["pack", "--workspace", workspace, "--pack-destination", artifacts, "--json"], { cwd: root, encoding: "utf8" }));
-  return join(artifacts, packed[0].filename);
-});
+const packed = JSON.parse(execFileSync("npm", ["pack", "--workspace", "packages/cli", "--pack-destination", artifacts, "--json"], { cwd: root, encoding: "utf8" }));
+const tarball = join(artifacts, packed[0].filename);
+if (packed[0].bundled?.length !== 5) throw new Error(`single distribution omitted internal modules: ${JSON.stringify(packed[0].bundled)}`);
 
 writeFileSync(join(app, "package.json"), `${JSON.stringify({ name: "goah-install-smoke", private: true, version: "1.0.0" }, null, 2)}\n`);
-execFileSync("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", ...tarballs], { cwd: app, stdio: "pipe" });
+execFileSync("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", tarball], { cwd: app, stdio: "pipe" });
+execFileSync(process.execPath, ["--input-type=module", "-e", `
+  const modules = await Promise.all([
+    import('@goah/cli/kernel'), import('@goah/cli/session'), import('@goah/cli/execution'), import('@goah/cli/metrics'),
+    import('@goah/cli/sqlite'), import('@goah/cli/supervisor'), import('@goah/cli/runner-pi'), import('@goah/cli/testkit')
+  ]);
+  const names = ['controlStream','replaySession','assertHandoff','evaluateMetric','SqliteLedger','Supervisor','ProcessRunner','SimulatedClock'];
+  for (let index = 0; index < names.length; index += 1) if (typeof modules[index][names[index]] !== 'function') throw new Error('missing public subpath export: '+names[index]);
+`], { cwd: app, stdio: "pipe" });
 execFileSync("git", ["init", "-b", "main"], { cwd: app });
 execFileSync("git", ["config", "user.email", "goah-pack@example.test"], { cwd: app });
 execFileSync("git", ["config", "user.name", "GOAH Pack Test"], { cwd: app });
@@ -40,4 +39,4 @@ const wake = JSON.parse(run("run-once")).wake;
 const status = JSON.parse(run("status"));
 if (wake?.status !== "done" || status.wakes?.length !== 1 || status.recentHandoffs?.length !== 1) throw new Error("packed CLI did not complete the first handoff");
 
-process.stdout.write(`${JSON.stringify({ ok: true, app, packages: tarballs.length, wake: wake.id }, null, 2)}\n`);
+process.stdout.write(`${JSON.stringify({ ok: true, app, packages: 1, bundledModules: packed[0].bundled.length, wake: wake.id }, null, 2)}\n`);

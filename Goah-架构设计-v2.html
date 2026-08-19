@@ -155,13 +155,14 @@ next model request</pre>
 
 <section>
 <h2>9. 包与代码边界</h2>
-<table><thead><tr><th>包</th><th>职责</th></tr></thead><tbody>
-<tr><td><code>goah-ledger-contract</code></td><td><code>kernel</code>、标准 Session vocabulary/replay、标准 execution module 契约、可选 metric 契约</td></tr>
-<tr><td><code>goah-ledger-sqlite</code></td><td>SQLite schema v6、迁移、投影表与事务实现</td></tr>
-<tr><td><code>goah-supervisor</code></td><td>调度、lease、进程、connector、Active Context 与模块组合</td></tr>
-<tr><td><code>goah-runner-pi</code></td><td>Pi 事件标准化、request snapshot、compaction 与进程协议</td></tr>
-<tr><td><code>goah-testkit</code></td><td>faux runner、模拟时钟、内存 SQLite、connector 和故障注入</td></tr>
-<tr><td><code>@goah/cli</code></td><td>本地安装、配置、目标、运行、状态与 daemon 入口</td></tr>
+<p>源码保留六个 workspace 的依赖边界，但 npm 只发布一个 <code>@goah/cli</code> tarball。五个内部模块作为 bundled dependencies 随包安装，避免一个逻辑版本产生六次发布。</p>
+<table><thead><tr><th>源码模块</th><th>公共入口</th><th>职责</th></tr></thead><tbody>
+<tr><td><code>ledger-contract</code></td><td><code>@goah/cli/kernel</code> 等</td><td>kernel、Session replay、execution 和 metric 契约</td></tr>
+<tr><td><code>ledger-sqlite</code></td><td><code>@goah/cli/sqlite</code></td><td>SQLite schema v6、迁移、投影表与事务实现</td></tr>
+<tr><td><code>supervisor</code></td><td><code>@goah/cli/supervisor</code></td><td>调度、lease、进程、connector、Active Context</td></tr>
+<tr><td><code>runner-pi</code></td><td><code>@goah/cli/runner-pi</code></td><td>Pi 事件标准化、request snapshot、compaction 与进程协议</td></tr>
+<tr><td><code>testkit</code></td><td><code>@goah/cli/testkit</code></td><td>faux runner、模拟时钟、内存 SQLite、connector 和故障注入</td></tr>
+<tr><td><code>cli</code></td><td><code>@goah/cli</code></td><td>本地安装、配置、目标、运行、状态与 daemon 入口</td></tr>
 </tbody></table>
 </section>
 

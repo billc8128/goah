@@ -6,6 +6,7 @@
 - Added global and per-stream event ordering, normalized replayable Session events, exact request snapshots, interrupted-tool repair, and deterministic Active Context Markdown.
 - Removed mandatory Goal metrics and targets; metric contracts are now optional registrations.
 - Added SQLite schema v6 migrations and Goah architecture design v2.
+- Consolidated npm delivery into one `@goah/cli` tarball with public framework subpath exports.
 
 ## 0.1.0 — 2026-08-19
 

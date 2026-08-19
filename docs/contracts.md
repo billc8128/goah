@@ -11,4 +11,4 @@ All public packages evolve in lockstep under `CONTRACT_VERSION`. The current con
 - Handoff: observations, results, next steps, optional blocker, mail, and next wake.
 - Connector: process-isolated capability manifest declaring idempotency, query behavior, retry policy, and generic approval risk. Payload policy belongs to the connector or an extension.
 
-Third-party ledgers should run `assertLedgerConformance()` from `goah-testkit`.
+Third-party ledgers should run `assertLedgerConformance()` from `@goah/cli/testkit`. All public framework APIs ship in the single `@goah/cli` distribution; source workspace names are not independently published from 0.3 onward.

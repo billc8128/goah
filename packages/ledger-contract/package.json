@@ -1,5 +1,6 @@
 {
   "name": "goah-ledger-contract",
+  "private": true,
   "version": "0.3.0",
   "license": "Apache-2.0",
   "repository": {
@@ -15,9 +16,6 @@
     "!dist/**/*.test.*",
     "!dist/.tsbuildinfo"
   ],
-  "publishConfig": {
-    "access": "public"
-  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

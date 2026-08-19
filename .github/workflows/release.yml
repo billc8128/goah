@@ -24,13 +24,7 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run pack:smoke
-      - name: Publish workspaces
+      - name: Publish the single Goah distribution
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          npm publish --workspace packages/ledger-contract --access public --provenance
-          npm publish --workspace packages/ledger-sqlite --access public --provenance
-          npm publish --workspace packages/runner-pi --access public --provenance
-          npm publish --workspace packages/supervisor --access public --provenance
-          npm publish --workspace packages/testkit --access public --provenance
-          npm publish --workspace packages/cli --access public --provenance
+        run: npm publish --workspace packages/cli --access public --provenance

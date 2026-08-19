@@ -4,6 +4,7 @@
 
 - Goal creation no longer invents a mandatory metric contract.
 - Status reads wake streams and optional metric evaluations from the v0.3 ledger.
+- Bundles the five internal source modules and exposes their APIs through `@goah/cli/*`; releases now use one npm publish.
 
 ## 0.2.0
 

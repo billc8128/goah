@@ -128,16 +128,18 @@ requested ─▶ approved ─▶ dispatching ─▶ confirmed
 
 `unknown` is the honest state after a crash mid-dispatch: the side effect may or may not have happened. The default resolution is querying the connector, never re-dispatching — unless the connector's manifest declares native idempotency and opts into automatic retry.
 
-## Packages
+## Distribution and source modules
 
-| Package | Depends on | What it is |
+Goah publishes one npm package: `@goah/cli`. The internal workspaces remain separate in source, but are bundled into that tarball, so one logical release produces one package version and one npm notification. Framework consumers use subpath exports such as `@goah/cli/kernel`, `@goah/cli/session`, `@goah/cli/sqlite`, and `@goah/cli/supervisor`.
+
+| Source workspace | Public import | What it is |
 |---|---|---|
-| `goah-ledger-contract` | nothing | Generic event kernel, normalized Session vocabulary/replay, standard execution-module contracts, and optional metric policy. |
-| `goah-ledger-sqlite` | contract | Single-writer SQLite ledger. Append-only events enforced by triggers, projections rebuildable from events. |
-| `goah-supervisor` | contract | Scheduler, wake lifecycle, Active Context composer, action gate, and connector dispatch. It does not understand files, Git, workspaces, or artifacts. |
-| `goah-runner-pi` | contract | Worker-side Pi adapter plus supervisor-side `ProcessRunner`: normalized Session events, exact request snapshots, IPC, local tools, and compaction. |
-| `goah-testkit` | all of the above | Simulated clock, faux process worker, isolated mock connector, public ledger conformance suite, and fault injection. |
-| `@goah/cli` | contract, SQLite, runner, supervisor | Versioned config, singleton daemon, status/doctor, goals, approvals, and dashboard. |
+| `ledger-contract` | `@goah/cli/kernel`, `/session`, `/execution`, `/metrics` | Generic event kernel, normalized Session vocabulary/replay, execution contracts, and optional metric policy. |
+| `ledger-sqlite` | `@goah/cli/sqlite` | Single-writer SQLite ledger and rebuildable standard projections. |
+| `supervisor` | `@goah/cli/supervisor` | Scheduler, wake lifecycle, Active Context, action gate, and connector dispatch. |
+| `runner-pi` | `@goah/cli/runner-pi` | Pi adapter, process runner, normalized Session events, exact request snapshots, local tools, and compaction. |
+| `testkit` | `@goah/cli/testkit` | Simulated clock, faux worker, connector, conformance suite, and fault injection. |
+| `cli` | `@goah/cli` | Configuration, singleton daemon, status/doctor, goals, approvals, and dashboard. |
 
 ## Security model
 
