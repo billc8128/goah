@@ -19,6 +19,7 @@ export interface ActiveContextInput {
   lastHandoff: EventRecord | null;
   teamHandoffs: EventRecord[];
   team: TeamMemberView[];
+  revisionWarnings: string[];
   recoveryEvents: EventRecord[];
 }
 
@@ -38,11 +39,14 @@ export function composeActiveContext(input: ActiveContextInput): ActiveContextVi
   const handoff = input.lastHandoff?.data as { observations?: unknown; results?: unknown; nextSteps?: unknown; blocker?: unknown } | undefined;
   const sourceSeqs = new Set<number>();
   if (input.lastHandoff) sourceSeqs.add(input.lastHandoff.seq);
+  for (const event of input.teamHandoffs) sourceSeqs.add(event.seq);
   for (const event of input.recoveryEvents) sourceSeqs.add(event.seq);
   for (const action of input.actions) for (const seq of action.evidence) sourceSeqs.add(seq);
 
   const sections: Array<[string, string[]]> = [
-    ["Objective", input.goals.map((goal) => `- [${goal.id}] ${goal.objective} (owner: ${goal.owner}, phase: ${goal.phase}, revision: ${goal.revision})`)],
+    ["Objectives", input.goals.map((goal) => `- [${goal.id}] ${goal.objective} (owner: ${goal.owner}, phase: ${goal.phase}, revision: ${goal.revision})`)],
+    ["Observation methods", input.goals.map((goal) => `## ${goal.id}\n\n${goal.observationMethod ?? "MISSING — inspect the project and request authoritative confirmation before claiming progress or completion."}`)],
+    ["Revision barriers", input.revisionWarnings.map((warning) => `- ${warning}`)],
     ["Wake", [`- Trigger: ${input.wake.triggerRef}`, `- Attempt: ${input.wake.attempt}`]],
     ["Current state", lines(handoff?.observations)],
     ["Verified", lines(handoff?.results).map((line) => `${line}${input.lastHandoff ? ` [event:${input.lastHandoff.seq}]` : ""}`)],
