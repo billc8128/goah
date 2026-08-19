@@ -15,6 +15,8 @@ For a general installation, run `goah init --provider <provider> --model <id>`, 
 
 Runner RPC is bidirectional but fenced by the active wake lease. Default child capabilities cover ledger search, mail, scheduling, actions, and advice acknowledgement. Only CEO profiles can write child goals; verifier/audit profiles can write audit advice.
 
+Session inspection is read-only and does not resolve provider or connector secrets. Use `goah session list`, `session show`, `session replay`, `context show`, and `events --stream` to inspect the exact wake stream. `session export` writes a redacted `goah.session-export.v1` bundle by default; use `--raw` only when the destination is trusted because raw model requests and tool results may contain sensitive data.
+
 Set `GOAH_GUARD_REPO`, `GOAH_GUARD_STATE`, and optionally `GOAH_GUARD_TEST_COMMAND`. To use a real Pi worker, explicitly pass `GOAH_PI_MODEL`, `GOAH_PI_PROVIDER`, and the matching provider key. Without them the example uses the faux process worker and has no network dependency.
 
 Ark Coding Plan uses the Responses-compatible `ark-coding` provider. Use `arkcli resources list --modality text` to select a concrete model ID (`auto` is an ArkCLI-side alias and is not sent directly to the API), then inject the plan key only into the supervisor process:

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- Added read-only Session list/show/replay/context/events inspection and redacted audit exports.
+
 ## 0.3.0
 
 - Split the generic ledger kernel from standard execution modules.

@@ -211,4 +211,6 @@ function resolveCommand(command: string): string { return command === "$NODE" ? 
 function absolutePath(base: string, value: string): string { return isAbsolute(value) ? value : resolve(base, value); }
 function alive(pid: number): boolean { try { process.kill(pid, 0); return true; } catch { return false; } }
 export function configRoot(config: GoahConfig): string { return configRoots.get(config) ?? process.cwd(); }
+export { exportSession, listSessions, redactValue, replayWakeSession, showSession, showSessionContext, streamEvents } from "./inspect.js";
+export type { SessionContextSnapshot, SessionDetail, SessionExport, SessionListItem } from "./inspect.js";
 export { CONTRACT_VERSION };

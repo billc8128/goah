@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { createRuntime, diagnoseConfig, loadConfig, statusSnapshot, SupervisorLock, type PiProvider, writeDefaultConfig } from "./index.js";
+import { createRuntime, diagnoseConfig, exportSession, listSessions, loadConfig, replayWakeSession, showSession, showSessionContext, statusSnapshot, streamEvents, SupervisorLock, type PiProvider, writeDefaultConfig } from "./index.js";
 
 const args = process.argv.slice(2);
 
@@ -31,7 +31,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const config = loadConfig(configPath, { resolveSecrets: command !== "doctor" });
+  const config = loadConfig(configPath, { resolveSecrets: ["start", "run-once", "approve"].includes(command) });
   if (command === "doctor") {
     const result = diagnoseConfig(config);
     console.log(JSON.stringify(result, null, 2));
@@ -58,6 +58,24 @@ async function main(): Promise<void> {
       console.log(JSON.stringify({ wake }, null, 2));
     } else if (command === "status") {
       console.log(JSON.stringify(statusSnapshot(ledger), null, 2));
+    } else if (command === "session") {
+      const subcommand = requiredPositional(1, "session command");
+      if (subcommand === "list") console.log(JSON.stringify(listSessions(ledger), null, 2));
+      else {
+        const wakeId = requiredPositional(2, "wake id");
+        if (subcommand === "show") console.log(JSON.stringify(showSession(ledger, wakeId), null, 2));
+        else if (subcommand === "replay") console.log(JSON.stringify(replayWakeSession(ledger, wakeId), null, 2));
+        else if (subcommand === "export") {
+          const output = option("--output") ?? `${wakeId}.session.json`;
+          writeFileSync(output, `${JSON.stringify(exportSession(ledger, wakeId, { raw: flag("--raw") }), null, 2)}\n`);
+          console.log(JSON.stringify({ output, redacted: !flag("--raw") }, null, 2));
+        } else throw new Error(`unknown session command: ${subcommand}`);
+      }
+    } else if (command === "context") {
+      if (requiredPositional(1, "context command") !== "show") throw new Error("unknown context command");
+      console.log(JSON.stringify(showSessionContext(ledger, requiredPositional(2, "wake id")), null, 2));
+    } else if (command === "events") {
+      console.log(JSON.stringify(streamEvents(ledger, required("--stream"), option("--from") ? numberOption("--from") : 1), null, 2));
     } else if (command === "goal-list") console.log(JSON.stringify(ledger.goals(), null, 2));
     else if (command === "goal-create") {
       const id = required("--id"); const owner = required("--owner"); const objective = required("--objective");
@@ -86,6 +104,10 @@ goah doctor
 goah goal-create --id ID --owner AGENT --objective TEXT [--wake-now]
 goah wake AGENT [--reason TEXT]
 goah run-once
+goah session list
+goah session show|replay|export WAKE_ID [--output FILE] [--raw]
+goah context show WAKE_ID
+goah events --stream STREAM_ID [--from N]
 goah start | status | goal-list | action-list | approve | reject | dashboard
 Runner file and Git operations execute locally under the directory containing goah.config.json.`);
 }

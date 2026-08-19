@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1
+
+- Added `session list/show/replay/export`, `context show`, and stream-scoped `events` commands.
+- Session export defaults to structural redaction and read-only inspection no longer requires provider credentials.
+
 ## 0.3.0
 
 - Goal creation no longer invents a mandatory metric contract.

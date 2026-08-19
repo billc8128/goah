@@ -77,6 +77,19 @@ npx goah status
 
 `goah start` runs the resident supervisor after the one-shot path is healthy. `goah wake <agent>` queues a manual wake. Provider credentials stay as `env:NAME` references in `goah.config.json`; `doctor` resolves and validates them without printing them. For an offline installation check, use `goah init --provider faux`.
 
+Inspect and export the replayable Session ledger without requiring provider credentials:
+
+```bash
+npx goah session list
+npx goah session show <wake-id>
+npx goah session replay <wake-id>
+npx goah context show <wake-id>
+npx goah events --stream wake:<wake-id> [--from 1]
+npx goah session export <wake-id> --output session.json
+```
+
+`session show` summarizes event types, request count, replayed messages, and the last Active Context. Export is redacted by default: common secret fields, bearer/API-key patterns, and the current home path are removed while event identities remain intact. `--raw` is an explicit local-only escape hatch and may contain sensitive prompts and tool results.
+
 Ark Coding Plan requires explicit model capabilities because its model-list API does not publish context/output limits:
 
 ```bash

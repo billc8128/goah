@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { loadConfig, SupervisorLock } from "./index.js";
+import { loadConfig, redactValue, SupervisorLock } from "./index.js";
 
 const cli = fileURLToPath(new URL("./cli.js", import.meta.url));
 
@@ -53,12 +53,27 @@ test("CLI runs the install-to-first-handoff path with the faux provider", () => 
   assert.equal(created.wake.status, "queued");
   const run = JSON.parse(invoke(directory, "run-once"));
   assert.equal(run.wake.status, "done");
+  const wakeId = run.wake.id;
   const status = JSON.parse(invoke(directory, "status"));
   assert.equal(status.goals[0].id, "first");
   assert.equal(status.wakes.length, 1);
   assert.equal(status.wakes[0].status, "done");
   assert.equal(status.modelCapabilities.provider, "faux");
   assert.equal(status.recentHandoffs.length, 1);
+  const sessions = JSON.parse(invoke(directory, "session", "list"));
+  assert.equal(sessions[0].wakeId, wakeId);
+  assert.equal(sessions[0].sessionStatus, "completed");
+  const detail = JSON.parse(invoke(directory, "session", "show", wakeId));
+  assert.equal(detail.eventTypes["request.prepared"], 1);
+  assert.ok(detail.replay.messages.length > 0);
+  const context = JSON.parse(invoke(directory, "context", "show", wakeId));
+  assert.match(context.text, /Complete the first handoff/);
+  const events = JSON.parse(invoke(directory, "events", "--stream", `wake:${wakeId}`));
+  assert.equal(events.at(-1).type, "wake.done");
+  const exportedPath = join(directory, "session.json");
+  const exported = JSON.parse(invoke(directory, "session", "export", wakeId, "--output", exportedPath));
+  assert.equal(exported.redacted, true);
+  assert.equal(JSON.parse(readFileSync(exportedPath, "utf8")).format, "goah.session-export.v1");
   const queued = JSON.parse(invoke(directory, "wake", "worker", "--reason", "manual follow-up"));
   assert.equal(queued.wake.status, "queued");
   assert.equal(JSON.parse(invoke(directory, "run-once")).wake.status, "done");
@@ -76,6 +91,7 @@ test("CLI writes and diagnoses an explicit Ark model capability manifest", () =>
   const missingResult = JSON.parse(missing.stdout);
   assert.equal(missingResult.ok, false);
   assert.match(missingResult.checks.find((item: { name: string }) => item.name === "runner").detail, /GOAH_TEST_ARK_KEY/);
+  assert.deepEqual(JSON.parse(invoke(directory, "session", "list")), []);
   process.env.GOAH_TEST_ARK_KEY = "secret";
   try {
     const doctor = JSON.parse(invoke(directory, "doctor"));
@@ -84,6 +100,13 @@ test("CLI writes and diagnoses an explicit Ark model capability manifest", () =>
   } finally {
     delete process.env.GOAH_TEST_ARK_KEY;
   }
+});
+
+test("session export redaction preserves structure while removing common secrets and home paths", () => {
+  const redacted = redactValue({ token: "top-secret", nested: { text: `Bearer abcdef /Users/example key-abcdefghijklmnop ${process.env.HOME}` } }) as { token: string; nested: { text: string } };
+  assert.equal(redacted.token, "[REDACTED]");
+  assert.doesNotMatch(redacted.nested.text, /abcdef|abcdefghijklmnop/);
+  if (process.env.HOME) assert.doesNotMatch(redacted.nested.text, new RegExp(process.env.HOME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
 test("CLI runs a local operations goal without Git", () => {
