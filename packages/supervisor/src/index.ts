@@ -140,6 +140,7 @@ export class Supervisor {
   readonly #allowExternalActions: boolean;
   readonly #approvers: Set<string>;
   readonly #auditWriters: Set<string>;
+  #claimTail: Promise<void> = Promise.resolve();
   readonly #connectors = new Map<string, ConnectorProcessSpec>();
   readonly #metricCollectors = new Map<string, MetricCollectorRegistration>();
   readonly #heartbeatPolicies: NonNullable<SupervisorOptions["heartbeatPolicies"]>;
@@ -185,14 +186,10 @@ export class Supervisor {
   }
 
   async tick(): Promise<WakeSnapshot | null> {
-    for (const schedule of this.ledger.dueSchedules(this.#now())) this.#enqueueSchedule(schedule);
-    await this.#collectMetrics();
-    this.#scheduleMetricAndHeartbeatAlerts();
-    for (const mail of this.ledger.triggeringMail()) this.#enqueueTrigger(mail.to, `mail:${mail.id}`);
-    const now = this.clock.now();
-    const leaseToken = randomUUID();
-    const wake = this.ledger.claimNextWake(now.toISOString(), new Date(now.getTime() + this.#leaseMs).toISOString(), leaseToken);
+    const claimed = await this.#claimNextWake();
+    const wake = claimed?.wake ?? null;
     if (!wake) return null;
+    const leaseToken = claimed!.leaseToken;
     let running = wake;
     let handle: RunnerHandle | null = null;
     try {
@@ -239,6 +236,25 @@ export class Supervisor {
       if (handle) await handle.terminate();
       await this.#markAbnormal(running, error instanceof Error ? error.message : String(error));
       return this.#wake(running.id);
+    }
+  }
+
+  async #claimNextWake(): Promise<{ wake: WakeSnapshot; leaseToken: string } | null> {
+    const previous = this.#claimTail;
+    let release!: () => void;
+    this.#claimTail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      for (const schedule of this.ledger.dueSchedules(this.#now())) this.#enqueueSchedule(schedule);
+      await this.#collectMetrics();
+      this.#scheduleMetricAndHeartbeatAlerts();
+      for (const mail of this.ledger.triggeringMail()) this.#enqueueTrigger(mail.to, `mail:${mail.id}`);
+      const now = this.clock.now();
+      const leaseToken = randomUUID();
+      const wake = this.ledger.claimNextWake(now.toISOString(), new Date(now.getTime() + this.#leaseMs).toISOString(), leaseToken);
+      return wake ? { wake, leaseToken } : null;
+    } finally {
+      release();
     }
   }
 

@@ -362,8 +362,9 @@ test("post-wake metric verification closes a failing repo-health loop", async ()
     args: ["-e", "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const r=JSON.parse(s);const fs=require('fs');process.stdout.write(JSON.stringify({goalId:r.goalId,source:'repo.health',observedAt:new Date().toISOString(),value:fs.existsSync(process.env.GOAH_HEALTH_FILE)?1:0}))})"],
     env: { GOAH_HEALTH_FILE: healthFile },
   }, 60_000);
-  const completed = await supervisor.runAvailable(1, 5);
+  const completed = await supervisor.runAvailable(4, 5);
   assert.equal(completed.length, 1);
+  assert.equal(ledger.wakes().length, 1);
   assert.deepEqual(ledger.metricSamples("health").map((sample) => sample.value), [0, 1]);
   assert.equal(readFileSync(join(repo, "healthy.txt"), "utf8"), "ok\n");
   ledger.close();

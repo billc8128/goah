@@ -24,7 +24,7 @@ type FaultPoint = "after_event_before_projection";
 type FaultInjector = (point: FaultPoint) => void;
 type Row = Record<string, unknown>;
 
-export const SQLITE_SCHEMA_VERSION = 3;
+export const SQLITE_SCHEMA_VERSION = 4;
 
 const createWakes = `CREATE TABLE IF NOT EXISTS wakes (
   id TEXT PRIMARY KEY,
@@ -66,6 +66,7 @@ CREATE INDEX IF NOT EXISTS wakes_queue_order ON wakes(status, enqueued_seq);
 CREATE INDEX IF NOT EXISTS schedule_due ON schedule(next_wake_at);
 CREATE INDEX IF NOT EXISTS events_agent_kind_seq ON events(agent, kind, seq DESC);
 CREATE INDEX IF NOT EXISTS events_wake_seq ON events(wake_id, seq);
+CREATE INDEX IF NOT EXISTS events_coalesced_trigger ON events(json_extract(data,'$.triggerRef'), wake_id) WHERE kind='wake.trigger_coalesced';
 CREATE INDEX IF NOT EXISTS actions_agent_status ON actions(agent, status);
 CREATE UNIQUE INDEX IF NOT EXISTS goals_one_active_budget_owner ON goals(owner) WHERE budget IS NOT NULL AND phase='active';
 CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(agent, kind, data, content='events', content_rowid='seq');
@@ -164,6 +165,8 @@ export class SqliteLedger implements Ledger {
       this.#migrateV1();
     } else if (version === 2) {
       this.#migrateV2();
+    } else if (version === 3) {
+      this.#migrateV3();
     } else {
       this.db.exec(schema);
     }
@@ -353,7 +356,13 @@ export class SqliteLedger implements Ledger {
   lastEvent(agent: string, kind: string): EventRecord | null { const row = this.db.prepare("SELECT * FROM events WHERE agent=? AND kind=? ORDER BY seq DESC LIMIT 1").get(agent, kind) as Row | undefined; return row ? mapEvent(row) : null; }
   eventsForWake(wakeId: string): EventRecord[] { return (this.db.prepare("SELECT * FROM events WHERE wake_id=? ORDER BY seq").all(wakeId) as Row[]).map(mapEvent); }
   wake(id: string): WakeSnapshot | null { const row = this.db.prepare("SELECT * FROM wakes WHERE id=?").get(id) as Row | undefined; return row ? mapWake(row) : null; }
-  wakeByTrigger(agent: string, triggerRef: string): WakeSnapshot | null { const row = this.db.prepare("SELECT * FROM wakes WHERE agent=? AND trigger_ref=?").get(agent, triggerRef) as Row | undefined; return row ? mapWake(row) : null; }
+  wakeByTrigger(agent: string, triggerRef: string): WakeSnapshot | null {
+    const direct = this.db.prepare("SELECT * FROM wakes WHERE agent=? AND trigger_ref=?").get(agent, triggerRef) as Row | undefined;
+    if (direct) return mapWake(direct);
+    const coalesced = this.db.prepare(`SELECT w.* FROM events e JOIN wakes w ON w.id=e.wake_id
+      WHERE e.kind='wake.trigger_coalesced' AND json_extract(e.data,'$.triggerRef')=? AND w.agent=? LIMIT 1`).get(triggerRef, agent) as Row | undefined;
+    return coalesced ? mapWake(coalesced) : null;
+  }
   queuedWakeForAgent(agent: string): WakeSnapshot | null { const row = this.db.prepare("SELECT * FROM wakes WHERE agent=? AND status='queued' ORDER BY enqueued_seq LIMIT 1").get(agent) as Row | undefined; return row ? mapWake(row) : null; }
   action(id: string): ActionSnapshot | null { const row = this.db.prepare("SELECT * FROM actions WHERE id=?").get(id) as Row | undefined; return row ? mapAction(row) : null; }
   goalsForOwner(owner: string): GoalSnapshot[] { return (this.db.prepare("SELECT * FROM goals WHERE owner=? ORDER BY id").all(owner) as Row[]).map(mapGoal); }
@@ -519,6 +528,12 @@ export class SqliteLedger implements Ledger {
   #migrateV2(): void {
     this.#transaction(() => {
       this.db.exec(`${indexesAndTriggers} INSERT INTO events_fts(events_fts) VALUES('rebuild'); PRAGMA user_version=${SQLITE_SCHEMA_VERSION};`);
+    });
+  }
+
+  #migrateV3(): void {
+    this.#transaction(() => {
+      this.db.exec(`CREATE INDEX IF NOT EXISTS events_coalesced_trigger ON events(json_extract(data,'$.triggerRef'), wake_id) WHERE kind='wake.trigger_coalesced'; PRAGMA user_version=${SQLITE_SCHEMA_VERSION};`);
     });
   }
 

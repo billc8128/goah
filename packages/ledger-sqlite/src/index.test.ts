@@ -43,6 +43,9 @@ test("wake queue is FIFO, deduplicated, fenced and safely recovered", () => {
   ledger.enqueueWake(wake("zzz", "a"), "supervisor");
   ledger.enqueueWake(wake("aaa", "b"), "supervisor");
   assert.equal(ledger.enqueueWake({ ...wake("duplicate", "a"), triggerRef: "trigger:zzz" }, "supervisor").created, false);
+  ledger.appendEvent({ ts: "2030-01-01T00:00:00.000Z", agent: "supervisor", kind: "wake.trigger_coalesced", data: { wakeId: "zzz", triggerRef: "trigger:alias" }, wakeId: "zzz" });
+  assert.equal(ledger.wakeByTrigger("a", "trigger:alias")?.id, "zzz");
+  assert.equal(ledger.enqueueWake({ ...wake("alias", "a"), triggerRef: "trigger:alias" }, "supervisor").created, false);
   const first = ledger.claimNextWake("2030-01-01T00:00:00.000Z", "2030-01-01T00:00:10.000Z", "lease-1");
   assert.equal(first?.id, "zzz");
   ledger.markWakeRunning("zzz", "2030-01-01T00:00:01.000Z", "lease-1");
@@ -134,7 +137,7 @@ test("schema v1 is migrated without rewriting event history", () => {
   assert.equal(ledger.wake("w")?.enqueuedSeq, 1);
   assert.match(ledger.wake("w")?.leaseToken ?? "", /^legacy:/);
   assert.equal(ledger.action("a")?.connector, "legacy");
-  assert.equal((ledger.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 3);
+  assert.equal((ledger.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 4);
   assert.equal(ledger.events().length, 2);
   ledger.rebuildProjections();
   assert.equal(ledger.wake("w")?.enqueuedSeq, 1);
@@ -152,7 +155,22 @@ test("schema v2 migration builds the FTS index from existing events", () => {
   raw.close();
   const migrated = new SqliteLedger(path, { clock: new FixedClock() });
   assert.equal(migrated.searchEvents("migrationsearchterm").length, 1);
-  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 3);
+  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 4);
+  migrated.close();
+});
+
+test("schema v3 migration indexes coalesced wake triggers", () => {
+  const path = join(mkdtempSync(join(tmpdir(), "goah-v3-")), "ledger.sqlite");
+  const ledger = new SqliteLedger(path, { clock: new FixedClock() });
+  ledger.enqueueWake(wake("w", "a"), "supervisor");
+  ledger.appendEvent({ ts: "2030-01-01T00:00:00.000Z", agent: "supervisor", kind: "wake.trigger_coalesced", data: { wakeId: "w", triggerRef: "metric:g:missing:none" }, wakeId: "w" });
+  ledger.close();
+  const raw = new DatabaseSync(path);
+  raw.exec("DROP INDEX events_coalesced_trigger; PRAGMA user_version=3");
+  raw.close();
+  const migrated = new SqliteLedger(path, { clock: new FixedClock() });
+  assert.equal(migrated.wakeByTrigger("a", "metric:g:missing:none")?.id, "w");
+  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 4);
   migrated.close();
 });
 
