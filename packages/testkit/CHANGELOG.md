@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0
+
+- Updated faux runners and conformance coverage for stream events, Active Context, and replayable sessions.
+
 ## 0.2.0
 
 - Added non-Git CLI coverage and runner-owned local file/crash recovery tests.

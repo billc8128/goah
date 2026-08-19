@@ -15,6 +15,7 @@ Coding agents are good at bounded tasks: you give one a prompt, it works, it sto
 goah is the harness around the agent that owns exactly that layer:
 
 - **The ledger is the agent.** Agent processes are short-lived: hydrate → work → handoff → exit. Everything durable lives in an append-only event ledger; every table is a projection that can be rebuilt from events. Crash recovery is replay, not heuristics.
+- **The session is replayable.** User messages, assistant deltas and completed messages, tool calls/results, compaction replacements, and the exact prepared model request are normalized into typed event streams. The active conversation surface is derived from those facts.
 - **Every action is accountable.** An external action carries its `reason` and `evidence` (references to ledger events), passes a gate before dispatch, and has crash-safe delivery semantics — a crash mid-dispatch resolves to `unknown`, which is reconciled by querying, never blindly retried.
 - **Execution stays local and inspectable.** The runner owns local files, bash, and Git under the directory containing `goah.config.json`. GOAH records process failure and recovery context; coding skills decide how to branch, commit, merge, or preserve partial Git work.
 - **Lease ownership is bounded, runner policy is not prescribed.** A live runner continuously renews its fenced wake lease; if the supervisor dies, renewal stops and recovery can terminate the old process. Token, cost, timeout, and handoff-reserve policy belong to each runner implementation.
@@ -23,11 +24,13 @@ goah does not replace your agent runner (pi, or any runner that implements the `
 
 ## Status
 
-**Experimental.** Contracts are `0.2.0` / `experimental`. SQLite schema changes now use explicit, version-checked migrations; public TypeScript contracts may still change before 1.0.
+**Experimental.** Contracts are `0.3.0` / `experimental`. SQLite schema changes use explicit, version-checked migrations; public TypeScript contracts may still change before 1.0.
 
 Implemented and tested today:
 
-- Append-only SQLite event ledger with five rebuildable projections (`goals`, `schedule`, `wakes`, `mailbox`, `actions`), event + projection committed in one transaction, fault-injection tested at every state transition
+- Stream-aware append-only SQLite event kernel with global `seq`, contiguous per-stream `streamSeq`, and five standard execution-module projections (`goals`, `schedule`, `wakes`, `mailbox`, `actions`)
+- Replayable session vocabulary for exact request snapshots, user/assistant/tool events, compaction replacements, completed transcripts, and interrupted-tool `unknown` repair
+- Deterministic Active Context composition: structured projections render to short Markdown, and the exact model-visible value is retained by `request.prepared`
 - FIFO wake lifecycle with leases: per-agent concurrency of one, trigger deduplication, fencing tokens, recorded runner PIDs, and kill-before-recovery semantics
 - Action state machine with real evidence validation, human approval/rejection, `unknown` semantics, and query-based reconciliation
 - Audit advice write/ack APIs and mandatory injection of unacknowledged advice into the action owner's next context
@@ -35,8 +38,8 @@ Implemented and tested today:
 - Runner-owned local execution: non-software goals need no Git, while coding agents can use ordinary Git and worktree commands through their skills
 - Real runner subprocess boundary with sliding lease renewal, process-group termination, optional runner-specific timeout, and stale-event rejection
 - Mail acknowledged atomically with a valid handoff; abnormal wakes leave messages unread for redelivery
-- Injected clocks, schema v1→v3 migration, indexed bounded queries, and a public ledger conformance suite
-- Mechanical metric evaluation (missing/stale/sustain/guardrails), heartbeat escalation, trigger coalescing, FTS5 fact search, and generic evidence-backed actions
+- Injected clocks, schema v1→v5 migration into schema v6, indexed bounded queries, and a public ledger conformance suite
+- Optional mechanical metric evaluation (missing/stale/sustain/guardrails), heartbeat escalation, trigger coalescing, FTS5 fact search, and generic evidence-backed actions; Goal itself has no required metric or target
 - Official Pi 0.84.2 worker binding with local file/bash tools and model-view-only mid-turn compaction
 - Concurrent child agents, CEO global context, resident daemon loop, and a static read-only dashboard
 - Session verifier plus blind-first global audit interfaces, audit-advice delivery, and precision/risk-weighted-recall evaluation
@@ -55,8 +58,8 @@ Requires Node.js >= 24 (uses `node:sqlite`).
 git clone https://github.com/billc8128/goah.git
 cd goah
 npm install
-npm test          # contract, transaction-fault, process-recovery, merge, approval, audit, and connector tests
-npm run example   # one full wake: goal → schedule → lease → faux run → handoff → git merge → done
+npm test          # 49 contract, replay, transaction-fault, recovery, approval, audit, and connector tests
+npm run example   # one full wake: goal → schedule → lease → faux run → handoff → done
 npm run example:guardian
 npm run test:soak
 ```
@@ -100,19 +103,19 @@ Replace those sample limits with the selected model's published values.
             │                                                      │                                    │
             └──────────────────────────────────────────────────────┼────────────────────────────────────┘
                                                                    ▼
-                                            append-only events ledger (source of truth)
-                                            goals · schedule · wakes · mailbox · actions = projections
+                                            stream-aware event kernel (source of truth)
+                                            session facts + execution-module projections
 ```
 
 One wake, step by step:
 
 1. A due `schedule` entry becomes a queued `wake` (deduplicated by `(agent, trigger_ref)`).
 2. The supervisor leases it — one active wake per agent, lease expiry is crash detection.
-3. It hydrates bounded context from indexed ledger queries: owned goals, unread mail, unacknowledged audit advice, last handoff, and any recovery slice.
-4. The supervisor starts a runner subprocess only after the wake's lease token and PID are recorded. The child gets context and a local root, never a database connection or connector credentials.
+3. It deterministically composes a short Markdown Active Context from owned goals, unread mail, unacknowledged audit advice, the last handoff, open actions, and any recovery slice.
+4. The supervisor starts a runner subprocess only after the wake's lease token and PID are recorded. The child gets Active Context and a local root, never a database connection or connector credentials. Its normalized messages, tool calls, results, and exact requests stream back into the wake ledger.
 5. While the process is alive, the supervisor renews its fenced lease. If renewal stops, recovery kills the recorded process before another wake can own the agent. Runner-specific plugins may add token, timeout, cost, or handoff policy.
 6. A valid handoff atomically records the handoff, acknowledges consumed mail, delivers outgoing mail, and schedules the next wake. Local files and Git remain the runner's responsibility.
-7. Any other exit is `abnormal`: after process death is confirmed, a recovery wake can load the event slice and inspect partial files left in the same local root. Unacknowledged mail remains available.
+7. Any other exit is `abnormal`: after process death is confirmed, open tool calls receive synthetic `unknown` outcomes and the session closes as interrupted. A recovery wake receives the source event slice; unread mail remains available.
 
 External actions follow their own state machine, independent of wake success:
 
@@ -129,10 +132,10 @@ requested ─▶ approved ─▶ dispatching ─▶ confirmed
 
 | Package | Depends on | What it is |
 |---|---|---|
-| `goah-ledger-contract` | nothing | The contract: types, state machines, schema assertions. Agent-side code depends only on this. |
+| `goah-ledger-contract` | nothing | Generic event kernel, normalized Session vocabulary/replay, standard execution-module contracts, and optional metric policy. |
 | `goah-ledger-sqlite` | contract | Single-writer SQLite ledger. Append-only events enforced by triggers, projections rebuildable from events. |
-| `goah-supervisor` | contract | Scheduler, wake lifecycle, action gate, and connector dispatch. It does not understand files, Git, workspaces, or artifacts. |
-| `goah-runner-pi` | contract | Worker-side Pi adapter plus supervisor-side `ProcessRunner`: IPC, optional adapter timeout, local tools, compaction, and trace forwarding. |
+| `goah-supervisor` | contract | Scheduler, wake lifecycle, Active Context composer, action gate, and connector dispatch. It does not understand files, Git, workspaces, or artifacts. |
+| `goah-runner-pi` | contract | Worker-side Pi adapter plus supervisor-side `ProcessRunner`: normalized Session events, exact request snapshots, IPC, local tools, and compaction. |
 | `goah-testkit` | all of the above | Simulated clock, faux process worker, isolated mock connector, public ledger conformance suite, and fault injection. |
 | `@goah/cli` | contract, SQLite, runner, supervisor | Versioned config, singleton daemon, status/doctor, goals, approvals, and dashboard. |
 
@@ -155,20 +158,21 @@ Not guaranteed, by design honesty:
 - goah does not defend against prompt injection inside the agent's own context.
 - A runner with bash enabled is trusted local code and has the operating-system permissions of the user that launched it. GOAH does not sandbox arbitrary shell commands.
 
-## Roadmap
+## Architecture status
 
 | Milestone | Scope |
 |---|---|
-| 0 — contracts & failure semantics | ✅ implementation complete: metric/action/wake/connector contracts, FTS5, conformance and fault injection |
-| 1A — durable core | ✅ implementation complete: daemon, process isolation, leases, recovery context, runner-owned local execution, Pi binding |
-| 1B — long-wake continuity | ✅ implementation complete: model-view compaction and accelerated continuity tests; real 10h soak still operational evidence |
+| v2 ledger kernel | ✅ stream-aware event schema, SQLite v1–v5 migration, transaction fault injection |
+| replayable Session | ✅ normalized Pi messages/tools/requests, compaction facts, replay and interrupted-tool repair |
+| Active Context | ✅ deterministic Markdown composition with evidence source sequences |
+| execution modules | ✅ Goal/Wake/Schedule/Mailbox/Action/Handoff contracts are layered above the generic kernel; further physical package splitting is intentionally deferred |
 | 2 — narrow closed loop | ✅ repo-guardian implementation complete; real unattended 14-day run still operational evidence |
 | 3 — verification layer | ✅ verifier/global-audit interfaces, blind-first isolation and evaluation implemented; production calibration dataset remains operational work |
 | 4 — multi-agent | ✅ concurrent agents, CEO context, mailbox and dashboard implemented; domain policies remain extension-owned |
 
 ## Design
 
-The architecture document (Chinese) is [`北辰-harness-设计稿.html`](./北辰-harness-设计稿.html) — the design this codebase implements, including the reasoning behind session-per-wake, the rejection of resume-based continuity, and the action-centric accountability model. Milestone 0 decisions are recorded as ADRs in [`docs/adr/`](./docs/adr/).
+The current architecture document (Chinese) is [`Goah-架构设计-v2.html`](./Goah-架构设计-v2.html). [`北辰-harness-设计稿.html`](./北辰-harness-设计稿.html) is preserved as the historical v0.10 proposal and links forward to v2. Decisions are recorded as ADRs in [`docs/adr/`](./docs/adr/).
 
 ## Contributing
 

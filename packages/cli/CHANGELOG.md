@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.0
+
+- Goal creation no longer invents a mandatory metric contract.
+- Status reads wake streams and optional metric evaluations from the v0.3 ledger.
+
 ## 0.2.0
 
 - Removed the workspace field and Git requirement; the config directory is now the runner's implicit local root.

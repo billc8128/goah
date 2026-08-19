@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.0
+
+- Normalizes Pi lifecycle, message, delta, and tool events into the Goah Session vocabulary.
+- Captures the exact prepared request and replayable compaction replacement metadata.
+
 ## 0.2.0
 
 - Process runners accept a local `cwd`; Pi file, bash, and Git work execute directly under that root.

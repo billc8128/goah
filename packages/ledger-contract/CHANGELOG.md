@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+- Replaced the wake-specific event envelope with generic `streamId` / `streamSeq` events.
+- Added normalized Session event types, replay, request snapshots, and interrupted-session repair.
+- Split kernel, execution, Session, and optional metric contracts into source modules.
+- Removed mandatory Goal metric and target fields.
+
 ## 0.2.0
 
 - Removed the preassigned workspace path from `RunRequest`; local execution is owned by the runner.

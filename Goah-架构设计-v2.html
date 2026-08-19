@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Goah 架构设计 v2</title>
+<style>
+:root{--paper:#eef1f1;--card:#f8f9f9;--well:#e3e8e8;--ink:#151b1f;--muted:#536064;--line:#c8d1d2;--accent:#846313;--ok:#356844;--warn:#983c2c;--mono:ui-monospace,SFMono-Regular,Menlo,monospace;--serif:Georgia,"Songti SC",serif}
+@media(prefers-color-scheme:dark){:root{--paper:#10161a;--card:#171f23;--well:#20292e;--ink:#dce4e5;--muted:#9ba8aa;--line:#303b40;--accent:#d8a947;--ok:#78ad86;--warn:#d47d69}}
+*{box-sizing:border-box}body{margin:0;padding:0 24px 90px;background:var(--paper);color:var(--ink);font:16px/1.68 var(--serif)}main{max-width:940px;margin:auto}header{padding:56px 0 30px;border-bottom:1px solid var(--line)}.eyebrow,code,pre,th,.tag{font-family:var(--mono)}.eyebrow{color:var(--accent);letter-spacing:.13em;font-size:12px}h1{font-size:38px;line-height:1.12;margin:8px 0 12px}h2{font-size:23px;margin:48px 0 16px;padding-top:15px;border-top:1px solid var(--line)}h3{font-size:17px;margin:27px 0 8px}p,ul,ol{max-width:80ch}a{color:var(--accent)}code{font-size:.88em;background:var(--well);padding:1px 5px;border-radius:3px}pre{overflow:auto;background:var(--well);border:1px solid var(--line);padding:14px 16px;font-size:13px;line-height:1.55}.note{color:var(--muted);font-size:14px}.callout{padding:15px 17px;border-left:3px solid var(--accent);background:var(--card);margin:18px 0}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:18px 0}.box{background:var(--card);border:1px solid var(--line);padding:15px}.box h3{margin:0 0 6px}.arrow{text-align:center;color:var(--accent);font:22px var(--mono)}table{width:100%;border-collapse:collapse;margin:14px 0 22px;font-size:14px}th{text-align:left;color:var(--muted);font-size:11px;letter-spacing:.08em;text-transform:uppercase;border-bottom:1px solid var(--ink);padding:7px 12px 7px 0}td{vertical-align:top;border-bottom:1px solid var(--line);padding:9px 12px 9px 0}.tag{font-size:11px;color:var(--ok)}.old{color:var(--warn)}@media(max-width:720px){.grid{grid-template-columns:1fr}body{padding-left:16px;padding-right:16px}h1{font-size:31px}}
+</style>
+</head>
+<body><main>
+<header>
+  <div class="eyebrow">GOAH ARCHITECTURE · V2.0 · 2026-08-19</div>
+  <h1>Goah</h1>
+  <p>一个面向长期目标的 Agent Harness。单次 Agent runtime 负责推理和工具调用；Goah 负责把原始事实持久化、在崩溃后恢复执行，并在下一次唤醒时生成短而可信的工作上下文。</p>
+  <p class="note">本文是当前产品与架构事实源，对应 Goah 0.3.x。<a href="./北辰-harness-设计稿.html">北辰 Harness v0.10</a>仅保留为历史方案。</p>
+</header>
+
+<section>
+<h2>1. 定位与边界</h2>
+<div class="callout"><strong>Goah 不替代 Pi、DeepSeek Harness 或其他单次会话 runtime。</strong>它位于会话之上，让一个目标可以跨进程、跨唤醒、跨 Agent 持续推进。</div>
+<table><thead><tr><th>层</th><th>回答的问题</th><th>Goah 的责任</th></tr></thead><tbody>
+<tr><td>Session Runtime</td><td>模型这一轮看到了什么、调用了什么工具？</td><td>定义标准事件；具体循环由 runner 实现</td></tr>
+<tr><td>Execution</td><td>谁应继续、何时继续、外部动作是否已发生？</td><td>goal / wake / schedule / mailbox / action / handoff</td></tr>
+<tr><td>Active Context</td><td>下一轮模型此刻必须记住什么？</td><td>从结构化状态确定性渲染短 Markdown</td></tr>
+</tbody></table>
+<p>非目标：替用户判断什么行业指标重要；预设金钱预算；强制 Git/worktree；规定 token 或 wall-clock 上限；把所有目标都建模成软件项目。runner 可在本地电脑、云主机或其他进程环境执行，其文件与 Git 行为由 runner、模型或 skill 管理。</p>
+</section>
+
+<section>
+<h2>2. 三层架构</h2>
+<div class="grid">
+  <div class="box"><h3>Ledger Kernel</h3><p>通用 typed event、全局与流内顺序、append、replay、订阅、持久化和事务边界。不认识 Goal、Mail 或 Action。</p></div>
+  <div class="box"><h3>Execution Modules</h3><p>在内核上定义业务状态机与投影。默认组合提供长期目标执行所需的六个模块，但模块语义不进入事件内核。</p></div>
+  <div class="box"><h3>Active Context View</h3><p>把投影、handoff 和证据组合成短 Markdown。它是临时工作集，不是新的事实源。</p></div>
+</div>
+<pre>runner / supervisor / connector
+          │ facts
+          ▼
+ledger kernel ── append-only event streams
+          │ fold + transactional projection
+          ▼
+execution modules ── goal / wake / schedule / mailbox / action / handoff
+          │ deterministic composition
+          ▼
+active context text ── exact value captured by request.prepared
+          │
+          ▼
+next model request</pre>
+</section>
+
+<section>
+<h2>3. Ledger Kernel</h2>
+<h3>3.1 事件信封</h3>
+<pre>interface EventRecord {
+  seq: number        // 全局单调顺序
+  streamId: string   // wake:w1 / goal:g1 / metric:g1 / control:audit
+  streamSeq: number  // 流内连续顺序
+  ts: string
+  actor: string
+  type: string
+  data: JsonValue
+}</pre>
+<ul>
+  <li><code>seq</code> 给出整个组织的一致历史；<code>streamSeq</code> 检测某个 Session 或 aggregate 是否缺事件。</li>
+  <li>事件只追加；SQLite trigger 拒绝 update/delete。</li>
+  <li>内核可批量追加；一个 batch 在同一事务内获得顺序。</li>
+  <li>业务投影的 schema 与 projector 由执行模块拥有；内核没有固定 <code>ProjectionName</code>。</li>
+</ul>
+
+<h3>3.2 当前 SQLite 实现</h3>
+<p>一个 SQLite WAL 数据库、Supervisor 单写。物理上仍包含 <code>events</code> 和五张标准模块投影表：<code>goals</code>、<code>schedule</code>、<code>wakes</code>、<code>mailbox</code>、<code>actions</code>。事件是事实源，投影可重建；业务 mutation 在同一事务中追加事件并更新投影。</p>
+<p>这一物理布局是默认组合，不是 Ledger Kernel 的公共类型系统。第三方内核实现只需满足事件顺序、追加、读取与事务契约。</p>
+</section>
+
+<section>
+<h2>4. Replayable Session Log</h2>
+<p>每个 wake 默认拥有一个 <code>wake:&lt;id&gt;</code> Session stream。runner 的内部事件必须映射为 Goah 的稳定 vocabulary，不能把 Pi 私有对象结构直接当长期协议。</p>
+<table><thead><tr><th>事件</th><th>载荷与用途</th></tr></thead><tbody>
+<tr><td><code>session.started</code></td><td>runner、provider、model 与能力</td></tr>
+<tr><td><code>request.prepared</code></td><td>实际 system prompt、Active Context、messages、tools、model config 与来源 seq</td></tr>
+<tr><td><code>message.user</code></td><td>进入模型表面的用户/合成输入</td></tr>
+<tr><td><code>message.assistant.delta</code></td><td>原始流式增量；用于流重放与取证</td></tr>
+<tr><td><code>message.assistant.completed</code></td><td>组装完成的模型消息；用于重建下一次模型历史</td></tr>
+<tr><td><code>tool.called / tool.completed</code></td><td>参数、结果与失败状态</td></tr>
+<tr><td><code>context.compacted</code></td><td>summary、被替换与保留的 message id；原始消息不删除</td></tr>
+<tr><td><code>session.completed / interrupted</code></td><td>正常终止或恢复时关闭中断 Session</td></tr>
+</tbody></table>
+<p><code>replaySession()</code> 从标准事件 fold 出模型可见的 <code>Message[]</code>。raw delta 不重复进入历史；assembled message 才是下一请求的消息节点。compaction 只替换当前 surface，原始事件仍可审计。</p>
+<h3>4.1 崩溃修复</h3>
+<p>若账本存在 <code>tool.called</code> 而 runner 在 <code>tool.completed</code> 前死亡，Supervisor 追加 synthetic <code>tool.completed { outcome: "unknown" }</code> 和 <code>session.interrupted</code>。它不声称工具未执行，也不盲目重放外部副作用。</p>
+</section>
+
+<section>
+<h2>5. Execution Modules</h2>
+<table><thead><tr><th>模块</th><th>标准机制</th><th>不属于模块的政策</th></tr></thead><tbody>
+<tr><td>Goal</td><td><code>id / parentId / objective / owner / phase / revision</code>；父层 authority 与 CAS</td><td>强制 metric、target、金钱预算</td></tr>
+<tr><td>Wake</td><td>queued / leased / running / done / abnormal / merge_blocked；lease fencing；同 Agent 并发 1</td><td>任务 token/时长上限</td></tr>
+<tr><td>Schedule</td><td>到期生成 wake；触发去重与合并</td><td>行业特定节奏</td></tr>
+<tr><td>Mailbox</td><td>durable delivery；handoff 成功后才 ack</td><td>组织结构与汇报制度</td></tr>
+<tr><td>Action</td><td>requested → approved → dispatching → confirmed/failed/unknown；unknown 对账</td><td>哪些动作危险、金额或频率限制</td></tr>
+<tr><td>Handoff</td><td>observations / results / nextSteps / blocker</td><td>如何评价业务结果</td></tr>
+</tbody></table>
+<p>Metric 是可选扩展：应用把 <code>MetricContract</code> 和 collector 注册给 Supervisor；Goal 本身不要求 metric。connector manifest 只声明幂等、查询、自动重试与通用风险级别，具体参数政策由应用拥有。</p>
+</section>
+
+<section>
+<h2>6. Active Context View</h2>
+<p>Active Context 不是模型每次重新总结，而是 Supervisor 的 <code>ContextComposer</code> 从结构化投影确定性生成。底层保持结构化，输出给模型的是短 Markdown。</p>
+<pre># Objective
+- [store] Open the store and obtain the first verified order.
+
+# Wake
+- Trigger: supplier reply
+
+# Verified
+- Supplier A can deliver within 48 hours. [event:182]
+
+# Open
+- Action create_storefront is unknown; reconcile before retrying.
+
+# Next
+- Confirm the return policy.
+
+# Incoming
+- [decision] Preserve at least 30% gross margin.</pre>
+<p>生成器返回 <code>{ text, sourceSeqs }</code>。模型可在 handoff 中产生语义总结，但机械事实（Goal revision、未读 Mail、Action 状态）不能由模型改写。最终发送值由 <code>request.prepared</code> 记录，因此可以复现模型当时实际看到的上下文。</p>
+</section>
+
+<section>
+<h2>7. 进程与权限边界</h2>
+<ul>
+  <li>Supervisor 是唯一 SQLite 写入方，常驻且不调用模型。</li>
+  <li>runner 每个 wake 一个短命子进程；不持有数据库连接和外部 connector 密钥。</li>
+  <li>runner 通过事件输出和受限 RPC 与 Supervisor 通信。</li>
+  <li>connector 在单独子进程运行，Supervisor 只下发该 connector 明确需要的密钥。</li>
+  <li>本地或云端执行都由 runner 的 <code>cwd</code> 决定。Goah 不拥有 workspace/artifact/Git 生命周期。</li>
+  <li>不引入消息队列、缓存或独立调度服务。</li>
+</ul>
+</section>
+
+<section>
+<h2>8. 故障语义</h2>
+<table><thead><tr><th>故障</th><th>确定性结果</th></tr></thead><tbody>
+<tr><td>event 与投影之间崩溃</td><td>同一事务整体回滚</td></tr>
+<tr><td>runner 挂死</td><td>滑动 lease 停止续约；Supervisor 终止记录 pid，wake abnormal</td></tr>
+<tr><td>runner 中途退出</td><td>保留全部已落 Session 事件；未决 tool outcome 记 unknown</td></tr>
+<tr><td>mail 装载后 wake 失败</td><td>mail 仍未读；只在成功 handoff 事务内 ack</td></tr>
+<tr><td>connector dispatching 时崩溃</td><td>action 转 unknown；查询外部状态后 confirmed/failed</td></tr>
+<tr><td>Supervisor 重启</td><td>恢复 dispatching action 与过期 wake；不并发重放仍存活的 runner</td></tr>
+</tbody></table>
+</section>
+
+<section>
+<h2>9. 包与代码边界</h2>
+<table><thead><tr><th>包</th><th>职责</th></tr></thead><tbody>
+<tr><td><code>goah-ledger-contract</code></td><td><code>kernel</code>、标准 Session vocabulary/replay、标准 execution module 契约、可选 metric 契约</td></tr>
+<tr><td><code>goah-ledger-sqlite</code></td><td>SQLite schema v6、迁移、投影表与事务实现</td></tr>
+<tr><td><code>goah-supervisor</code></td><td>调度、lease、进程、connector、Active Context 与模块组合</td></tr>
+<tr><td><code>goah-runner-pi</code></td><td>Pi 事件标准化、request snapshot、compaction 与进程协议</td></tr>
+<tr><td><code>goah-testkit</code></td><td>faux runner、模拟时钟、内存 SQLite、connector 和故障注入</td></tr>
+<tr><td><code>@goah/cli</code></td><td>本地安装、配置、目标、运行、状态与 daemon 入口</td></tr>
+</tbody></table>
+</section>
+
+<section>
+<h2>10. v1 → v2 的决策变化</h2>
+<table><thead><tr><th>历史方案</th><th>v2 决定</th></tr></thead><tbody>
+<tr><td class="old">workspace / artifact / Git 是框架状态</td><td>删除；文件与 Git 属于 runner 环境</td></tr>
+<tr><td class="old">Goal 必须有 metric/target/budget</td><td>Goal 最小化；metric 是可选扩展；budget 属于应用</td></tr>
+<tr><td class="old">runner token、wall-clock、handoff reserve 是核心契约</td><td>属于 runner/deployment policy；核心仅提供 lease 存活语义</td></tr>
+<tr><td class="old">Pi trace 只是审计附件</td><td>标准化为可 replay 的 Session 事实流</td></tr>
+<tr><td class="old">固定五投影定义 Ledger</td><td>Ledger Kernel 通用；五投影是默认 execution modules</td></tr>
+<tr><td class="old">装载一组结构化 JSON</td><td>结构化源确定性渲染短 Markdown，并记录最终 request snapshot</td></tr>
+</tbody></table>
+</section>
+
+<section>
+<h2>11. 当前完成度与限制</h2>
+<p><span class="tag">IMPLEMENTED IN 0.3</span> stream-aware event schema、v1–v5 SQLite 迁移、标准 Pi Session events、request snapshot、compaction replacement facts、Session replay、中断 tool unknown、Active Context Markdown、可选 metric、现有 wake/action 故障语义。</p>
+<p><span class="tag">NEXT</span> 为非 Pi runner 发布 conformance suite；为海量 delta 增加批量 checkpoint 策略；验证跨版本 Session vocabulary 的升级路径；用真实长跑账本检验 Active Context 的选择质量。</p>
+<p class="note">Goah 保证状态机与证据链的机械一致性，不保证模型判断正确，也不把 prompt injection 防御伪装成账本能力。</p>
+</section>
+</main></body></html>
