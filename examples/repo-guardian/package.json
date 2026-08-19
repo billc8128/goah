@@ -1,14 +1,16 @@
 {
   "name": "@goah/example-repo-guardian",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
-  "scripts": { "start": "node dist/index.js" },
+  "scripts": {
+    "start": "node dist/index.js"
+  },
   "dependencies": {
-    "goah-ledger-contract": "0.1.0",
-    "goah-ledger-sqlite": "0.1.0",
-    "goah-runner-pi": "0.1.0",
-    "goah-supervisor": "0.1.0",
-    "goah-testkit": "0.1.0"
+    "goah-ledger-contract": "0.1.1",
+    "goah-ledger-sqlite": "0.1.1",
+    "goah-runner-pi": "0.1.1",
+    "goah-supervisor": "0.1.1",
+    "goah-testkit": "0.1.1"
   }
 }

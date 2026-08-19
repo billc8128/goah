@@ -64,7 +64,7 @@ npm run test:soak
 Initialize and operate a configured supervisor:
 
 ```bash
-npm install --save-dev goah
+npm install --save-dev @goah/cli
 npx goah init --provider anthropic --model claude-sonnet-4-6
 npx goah doctor
 npx goah goal-create --id first-goal --owner worker --objective "Complete the first verified handoff" --wake-now
@@ -134,7 +134,7 @@ requested ─▶ approved ─▶ dispatching ─▶ confirmed
 | `goah-supervisor` | contract | Scheduler, wake lifecycle, action gate, connector dispatch, git workspace manager. Never executes user code in-process. |
 | `goah-runner-pi` | contract | Worker-side Pi adapter plus supervisor-side `ProcessRunner`: IPC, timeout termination, handoff reserve, and trace forwarding. |
 | `goah-testkit` | all of the above | Simulated clock, faux process worker, isolated mock connector, public ledger conformance suite, and fault injection. |
-| `goah` | contract, SQLite, runner, supervisor | Versioned config, singleton daemon, status/doctor, goals, approvals, dashboard, and recovery refs. |
+| `@goah/cli` | contract, SQLite, runner, supervisor | Versioned config, singleton daemon, status/doctor, goals, approvals, dashboard, and recovery refs. |
 
 ## Security model
 

@@ -1,9 +1,12 @@
 {
   "name": "goah-monorepo",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "Apache-2.0",
-  "repository": { "type": "git", "url": "git+https://github.com/billc8128/goah.git" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/billc8128/goah.git"
+  },
   "type": "module",
   "workspaces": [
     "packages/*",
