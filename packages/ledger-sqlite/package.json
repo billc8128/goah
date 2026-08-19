@@ -1,6 +1,6 @@
 {
   "name": "goah-ledger-sqlite",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -23,6 +23,6 @@
   "types": "./dist/index.d.ts",
   "exports": "./dist/index.js",
   "dependencies": {
-    "goah-ledger-contract": "0.1.1"
+    "goah-ledger-contract": "0.2.0"
   }
 }

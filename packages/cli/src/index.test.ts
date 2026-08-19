@@ -19,7 +19,7 @@ function repository(): string {
 }
 
 function invoke(directory: string, ...args: string[]): string {
-  return execFileSync(process.execPath, [cli, ...args], { cwd: directory, encoding: "utf8" });
+  return execFileSync(process.execPath, [cli, ...args], { cwd: directory, encoding: "utf8", env: { ...process.env, GOAH_STATE_HOME: join(tmpdir(), "goah-cli-test-state") } });
 }
 
 test("CLI initializes versioned config, resolves secret references, and enforces singleton lock", () => {
@@ -27,6 +27,8 @@ test("CLI initializes versioned config, resolves secret references, and enforces
   invoke(directory, "init");
   const initialized = JSON.parse(readFileSync(join(directory, "goah.config.json"), "utf8"));
   assert.equal(initialized.version, 1);
+  assert.equal(initialized.workspace, undefined);
+  assert.equal(initialized.stateDir.startsWith(directory), false);
   assert.equal(initialized.limits.maxTotalTokens, 2_000_000);
   assert.equal(initialized.limits.maxTokens, undefined);
   process.env.GOAH_CLI_TEST_KEY = "secret";
@@ -70,7 +72,7 @@ test("CLI writes and diagnoses an explicit Ark model capability manifest", () =>
   const raw = JSON.parse(readFileSync(join(directory, "goah.config.json"), "utf8"));
   assert.equal(raw.runner.env.ARK_API_KEY, "env:GOAH_TEST_ARK_KEY");
   assert.deepEqual(JSON.parse(raw.runner.env.GOAH_PI_MODEL_CAPABILITIES), { contextWindowTokens: 256_000, maxOutputTokensPerTurn: 32_000 });
-  const missing = spawnSync(process.execPath, [cli, "doctor"], { cwd: directory, encoding: "utf8" });
+  const missing = spawnSync(process.execPath, [cli, "doctor"], { cwd: directory, encoding: "utf8", env: { ...process.env, GOAH_STATE_HOME: join(tmpdir(), "goah-cli-test-state") } });
   assert.equal(missing.status, 1);
   const missingResult = JSON.parse(missing.stdout);
   assert.equal(missingResult.ok, false);
@@ -83,4 +85,15 @@ test("CLI writes and diagnoses an explicit Ark model capability manifest", () =>
   } finally {
     delete process.env.GOAH_TEST_ARK_KEY;
   }
+});
+
+test("CLI runs a local operations goal without Git", () => {
+  const directory = mkdtempSync(join(tmpdir(), "goah-operations-"));
+  invoke(directory, "init", "--provider", "faux", "--agent", "operator");
+  const doctor = JSON.parse(invoke(directory, "doctor"));
+  assert.equal(doctor.ok, true);
+  assert.match(doctor.checks.find((item: { name: string }) => item.name === "root").detail, /runner-owned local execution/);
+  invoke(directory, "goal-create", "--id", "store", "--owner", "operator", "--objective", "Open a storefront", "--wake-now");
+  assert.equal(JSON.parse(invoke(directory, "run-once")).wake.status, "done");
+  assert.equal(JSON.parse(invoke(directory, "status")).wakes.length, 1);
 });

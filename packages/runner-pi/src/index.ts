@@ -85,6 +85,7 @@ export class PiRunnerAdapter {
 export interface ProcessRunnerOptions {
   command: string;
   args?: string[];
+  cwd?: string;
   env?: Record<string, string>;
   inheritEnv?: string[];
   killGraceMs?: number;
@@ -110,6 +111,7 @@ export class ProcessRunner implements Runner {
   prepare(request: RunRequest): RunnerHandle {
     const child = spawn(this.options.command, this.options.args ?? [], {
       detached: process.platform !== "win32",
+      ...(this.options.cwd ? { cwd: this.options.cwd } : {}),
       env: childEnvironment(this.options.env, this.options.inheritEnv),
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -160,7 +162,6 @@ export class ProcessRunner implements Runner {
         const serializable: WorkerRequest = {
           wake: request.wake,
           context: request.context,
-          ...(request.workspacePath ? { workspacePath: request.workspacePath } : {}),
           limits: request.limits,
         };
         child.stdin?.write(`${JSON.stringify({ type: "start", request: serializable } satisfies ParentMessage)}\n`);

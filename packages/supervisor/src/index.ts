@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import {
   capabilityFor,
   evaluateMetric,
@@ -28,98 +26,9 @@ import {
 } from "goah-ledger-contract";
 import { defaultRolePrompt } from "./roles.js";
 
-export interface WorkspaceResult { status: "merged" | "merge_blocked"; commitSha: string; ref?: string }
-export interface SalvageResult { commitSha: string; ref: string }
-export interface WorkspaceManager {
-  prepare(wake: WakeSnapshot): Promise<string | undefined>;
-  merge(wake: WakeSnapshot): Promise<WorkspaceResult | undefined>;
-  salvage(wake: WakeSnapshot): Promise<SalvageResult | undefined>;
-}
-export class NoopWorkspaceManager implements WorkspaceManager {
-  async prepare(): Promise<undefined> { return undefined; }
-  async merge(): Promise<undefined> { return undefined; }
-  async salvage(): Promise<undefined> { return undefined; }
-}
-
-export class GitWorkspaceManager implements WorkspaceManager {
-  readonly #worktrees: string;
-  #mergeTail: Promise<void> = Promise.resolve();
-  constructor(readonly repository: string, readonly baseBranch = "main", worktrees?: string, readonly maxRetainedWorktrees = 32) {
-    this.#worktrees = worktrees ?? join(repository, ".goah", "worktrees");
-    mkdirSync(this.#worktrees, { recursive: true });
-    git(repository, ["rev-parse", "--is-inside-work-tree"]);
-    const excludeValue = git(repository, ["rev-parse", "--git-path", "info/exclude"]);
-    const exclude = isAbsolute(excludeValue) ? excludeValue : join(repository, excludeValue);
-    if (!readFileSync(exclude, "utf8").split("\n").includes(".goah/")) appendFileSync(exclude, "\n.goah/\n");
-  }
-
-  async prepare(wake: WakeSnapshot): Promise<string> {
-    const path = this.#path(wake.id);
-    if (existsSync(path)) return path;
-    if (readdirSync(this.#worktrees).length >= this.maxRetainedWorktrees) throw new Error("worktree retention quota exceeded");
-    git(this.repository, ["worktree", "add", "-b", this.#branch(wake.id), path, this.baseBranch]);
-    return path;
-  }
-
-  async merge(wake: WakeSnapshot): Promise<WorkspaceResult> {
-    const previous = this.#mergeTail;
-    let release!: () => void;
-    this.#mergeTail = new Promise<void>((resolve) => { release = resolve; });
-    await previous;
-    try { return this.#merge(wake); }
-    finally { release(); }
-  }
-
-  #merge(wake: WakeSnapshot): WorkspaceResult {
-    const path = this.#path(wake.id);
-    const branch = this.#branch(wake.id);
-    git(path, ["add", "-A"]);
-    git(path, ["commit", "--allow-empty", "-m", `wake:${wake.id}`]);
-    const rebase = gitResult(path, ["rebase", this.baseBranch]);
-    if (rebase.status !== 0) {
-      gitResult(path, ["rebase", "--abort"]);
-      const commitSha = git(path, ["rev-parse", "HEAD"]);
-      const ref = `refs/goah/merge-blocked/${safe(wake.id)}`;
-      git(this.repository, ["update-ref", ref, commitSha]);
-      this.#remove(path, branch);
-      return { status: "merge_blocked", commitSha, ref };
-    }
-    const commitSha = git(path, ["rev-parse", "HEAD"]);
-    if (gitResult(this.repository, ["merge", "--ff-only", branch]).status !== 0) {
-      const ref = `refs/goah/merge-blocked/${safe(wake.id)}`;
-      git(this.repository, ["update-ref", ref, commitSha]);
-      this.#remove(path, branch);
-      return { status: "merge_blocked", commitSha, ref };
-    }
-    this.#remove(path, branch);
-    return { status: "merged", commitSha };
-  }
-
-  async salvage(wake: WakeSnapshot): Promise<SalvageResult | undefined> {
-    const path = this.#path(wake.id);
-    if (!existsSync(path)) return undefined;
-    gitResult(path, ["rebase", "--abort"]);
-    git(path, ["add", "-A"]);
-    git(path, ["commit", "--allow-empty", "-m", `salvage:${wake.id}`]);
-    const commitSha = git(path, ["rev-parse", "HEAD"]);
-    const ref = `refs/goah/salvage/${safe(wake.id)}`;
-    git(this.repository, ["update-ref", ref, commitSha]);
-    this.#remove(path, this.#branch(wake.id));
-    return { commitSha, ref };
-  }
-
-  #remove(path: string, branch: string): void {
-    git(this.repository, ["worktree", "remove", "--force", path]);
-    gitResult(this.repository, ["branch", "-D", branch]);
-  }
-  #path(wakeId: string): string { return join(this.#worktrees, safe(wakeId)); }
-  #branch(wakeId: string): string { return `goah/wake-${safe(wakeId)}`; }
-}
-
 export interface SupervisorOptions {
   leaseMs?: number;
   limits?: RunLimits;
-  workspace?: WorkspaceManager;
   allowExternalActions?: boolean;
   approvers?: string[];
   auditWriters?: string[];
@@ -136,7 +45,6 @@ const defaultLimits: RunLimits = { maxTotalTokens: 2_000_000, maxWallClockMs: 3_
 export class Supervisor {
   readonly #leaseMs: number;
   readonly #limits: RunLimits;
-  readonly #workspace: WorkspaceManager;
   readonly #allowExternalActions: boolean;
   readonly #approvers: Set<string>;
   readonly #auditWriters: Set<string>;
@@ -151,7 +59,6 @@ export class Supervisor {
   constructor(readonly ledger: Ledger, readonly runner: Runner, readonly clock: Clock, options: SupervisorOptions = {}) {
     this.#limits = options.limits ?? defaultLimits;
     this.#leaseMs = Math.max(options.leaseMs ?? 30_000, this.#limits.maxWallClockMs + 60_000);
-    this.#workspace = options.workspace ?? new NoopWorkspaceManager();
     this.#allowExternalActions = options.allowExternalActions ?? false;
     this.#approvers = new Set(options.approvers ?? ["human", "ceo"]);
     this.#auditWriters = new Set(options.auditWriters ?? ["verifier", "audit"]);
@@ -177,11 +84,7 @@ export class Supervisor {
     this.ledger.recoverDispatchingActions();
     for (const expired of this.ledger.expiredWakes(this.#now())) {
       if (expired.status === "running" && expired.runnerPid) await this.runner.terminateProcess(expired.runnerPid);
-      const wake = this.ledger.recoverExpiredWake(expired.id, this.#now());
-      if (wake.status === "abnormal") {
-        const salvage = await this.#workspace.salvage(wake);
-        if (salvage) this.#workspaceEvent("workspace.salvaged", wake, salvage);
-      }
+      this.ledger.recoverExpiredWake(expired.id, this.#now());
     }
   }
 
@@ -193,13 +96,11 @@ export class Supervisor {
     let running = wake;
     let handle: RunnerHandle | null = null;
     try {
-      const workspacePath = await this.#workspace.prepare(wake);
       running = this.ledger.markWakeRunning(wake.id, this.#now(), leaseToken);
       const context = this.#loadContext(running);
       handle = this.runner.prepare({
         wake: running,
         context,
-        ...(workspacePath ? { workspacePath } : {}),
         limits: this.#limits,
         now: () => this.#now(),
         emit: (trace) => this.ledger.appendRunnerEvent({ ts: this.#now(), agent: running.agent, kind: `runner.${trace.kind}`, data: trace.data, wakeId: running.id }, leaseToken),
@@ -219,15 +120,7 @@ export class Supervisor {
         ? { id: `schedule:${running.agent}`, agent: running.agent, nextWakeAt: result.output.nextWakeAt, reason: "handoff.next_steps", setBy: running.agent }
         : null;
       this.ledger.commitHandoff({ agent: running.agent, wakeId: running.id, ts: this.#now(), output: result.output, outgoingMail, schedule });
-
-      const workspace = await this.#workspace.merge(running);
-      if (workspace?.status === "merge_blocked") {
-        this.#workspaceEvent("workspace.merge_blocked", running, workspace);
-        this.ledger.finishWake(running.id, "merge_blocked", this.#now());
-      } else {
-        if (workspace) this.#workspaceEvent("workspace.merged", running, workspace);
-        this.ledger.finishWake(running.id, "done", this.#now());
-      }
+      this.ledger.finishWake(running.id, "done", this.#now());
       if (this.#verifyMetricsAfterWake) {
         for (const goal of this.ledger.goalsForOwner(running.agent)) if (this.#metricCollectors.has(goal.id)) await this.collectMetricNow(goal.id);
       }
@@ -350,8 +243,6 @@ export class Supervisor {
   async #markAbnormal(wake: WakeSnapshot, reason: string): Promise<void> {
     const current = this.#wake(wake.id);
     if (current.runnerPid) await this.runner.terminateProcess(current.runnerPid);
-    const salvage = await this.#workspace.salvage(current);
-    if (salvage) this.#workspaceEvent("workspace.salvaged", current, salvage);
     this.ledger.appendEvent({ ts: this.#now(), agent: current.agent, kind: "wake.abnormal_reason", data: { reason }, wakeId: current.id });
     if (["leased", "running", "queued"].includes(current.status)) {
       this.ledger.finishWake(current.id, "abnormal", this.#now());
@@ -399,7 +290,6 @@ export class Supervisor {
     return { role, systemPrompt: this.#profiles.get(wake.agent)?.systemPrompt ?? defaultRolePrompt(role), goals, mail, auditAdvice, lastHandoff: handoff?.data ?? null, teamHandoffs, recoveryEvents } as unknown as JsonValue;
   }
 
-  #workspaceEvent(kind: string, wake: WakeSnapshot, data: object): void { this.ledger.appendEvent({ ts: this.#now(), agent: "supervisor", kind, data: data as JsonValue, wakeId: wake.id }); }
   #requiredConnector(name: string): ConnectorProcessSpec { const value = this.#connectors.get(name); if (!value) throw new Error(`connector not registered: ${name}`); return value; }
   #wake(id: string): WakeSnapshot { const value = this.ledger.wake(id); if (!value) throw new Error(`wake not found: ${id}`); return value; }
   #action(id: string): ActionSnapshot { const value = this.ledger.action(id); if (!value) throw new Error(`action not found: ${id}`); return value; }
@@ -475,23 +365,6 @@ export function renderDashboard(ledger: Ledger): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>goah status</title><style>body{font:14px ui-monospace;margin:32px;background:#101418;color:#dce3e4}section{margin:32px 0}pre{white-space:pre-wrap;border:1px solid #334;padding:12px}</style></head><body><h1>goah</h1><p>seq ${ledger.events().at(-1)?.seq ?? 0}</p><section><h2>Goals</h2><table>${rows(ledger.goals())}</table></section><section><h2>Wakes</h2><table>${rows(ledger.wakes())}</table></section><section><h2>Actions</h2><table>${rows(ledger.actions())}</table></section><section><h2>Mailbox</h2><table>${rows(ledger.mailbox())}</table></section></body></html>`;
 }
 
-export function inspectWorkspaceRef(repository: string, ref: string): string {
-  assertGoahRef(ref);
-  return git(repository, ["show", "--stat", "--oneline", ref]);
-}
-
-export function recoverWorkspaceRef(repository: string, ref: string, branch: string): string {
-  assertGoahRef(ref);
-  if (!/^[-A-Za-z0-9._/]+$/.test(branch)) throw new Error("invalid recovery branch name");
-  git(repository, ["branch", branch, ref]);
-  return branch;
-}
-
-export function discardWorkspaceRef(repository: string, ref: string): void {
-  assertGoahRef(ref);
-  git(repository, ["update-ref", "-d", ref]);
-}
-
 async function runConnector<T>(spec: ConnectorProcessSpec, operation: "dispatch" | "query", action: ActionSnapshot): Promise<T> {
   return runJsonProcess<T>(spec, { operation, action });
 }
@@ -523,9 +396,6 @@ async function terminateChild(child: ChildProcess, graceMs: number): Promise<voi
   if (child.exitCode === null && child.signalCode === null) signalPid(child.pid, "SIGKILL");
 }
 function signalPid(pid: number, signal: NodeJS.Signals): void { try { process.kill(process.platform === "win32" ? pid : -pid, signal); } catch {} }
-function safe(value: string): string { return value.replace(/[^a-zA-Z0-9._-]/g, "-"); }
-function git(cwd: string, args: string[]): string { const result = gitResult(cwd, args); if (result.status !== 0) throw new Error(result.stderr || `git ${args[0]} failed`); return result.stdout.trim(); }
-function gitResult(cwd: string, args: string[]): { status: number; stdout: string; stderr: string } { const result = spawnSync("git", args, { cwd, encoding: "utf8" }); return { status: result.status ?? 1, stdout: result.stdout, stderr: result.stderr }; }
 function payloadWithinConstraints(payload: JsonValue, constraints: { allowedAccounts?: string[]; allowedEnvironments?: string[]; maxAmount?: number }): boolean {
   if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return Object.keys(constraints).length === 0;
   if (constraints.allowedAccounts && (typeof payload.account !== "string" || !constraints.allowedAccounts.includes(payload.account))) return false;
@@ -539,7 +409,6 @@ function minimalEnvironment(explicit: Record<string, string> = {}): NodeJS.Proce
   return { ...env, ...explicit };
 }
 function escapeHtml(value: string): string { return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"); }
-function assertGoahRef(ref: string): void { if (!ref.startsWith("refs/goah/salvage/") && !ref.startsWith("refs/goah/merge-blocked/")) throw new Error("only goah recovery refs are allowed"); }
 function asRecord(value: JsonValue): Record<string, JsonValue> { if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("RPC params must be an object"); return value; }
 function numberArray(value: JsonValue | undefined): number[] { if (!Array.isArray(value) || value.some((item) => typeof item !== "number")) throw new Error("RPC evidence must be a number array"); return value as number[]; }
 function defaultCapabilities(role: AgentRole): AgentCapability[] {

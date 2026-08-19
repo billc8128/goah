@@ -1,4 +1,4 @@
-export const CONTRACT_VERSION = "0.1.0" as const;
+export const CONTRACT_VERSION = "0.2.0" as const;
 export const CONTRACT_STABILITY = "experimental" as const;
 
 export type JsonPrimitive = string | number | boolean | null;
@@ -184,7 +184,6 @@ export interface AgentProfile {
 export interface RunRequest {
   wake: WakeSnapshot;
   context: JsonValue;
-  workspacePath?: string;
   limits: RunLimits;
   now(): string;
   emit(event: RunnerTraceEvent): void;

@@ -1,15 +1,15 @@
 import { accessSync, constants, existsSync, mkdirSync, openSync, closeSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { CONTRACT_VERSION, assertRunLimits, evaluateMetric, type AgentProfile, type ConnectorManifest, type MetricProcessSpec, type RunLimits } from "goah-ledger-contract";
 import { SQLITE_SCHEMA_VERSION, SqliteLedger } from "goah-ledger-sqlite";
 import { createPiModel, piWorkerPath, ProcessRunner } from "goah-runner-pi";
-import { GitWorkspaceManager, renderDashboard, runSupervisorDaemon, Supervisor } from "goah-supervisor";
+import { renderDashboard, runSupervisorDaemon, Supervisor } from "goah-supervisor";
 
 export interface GoahConfig {
   version: 1;
-  workspace: string;
   stateDir: string;
   runner: { command: string; args: string[]; env?: Record<string, string>; inheritEnv?: string[] };
   limits?: RunLimits;
@@ -34,13 +34,16 @@ export interface InitOptions {
   baseUrl?: string;
 }
 export interface DoctorCheck { name: string; ok: boolean; detail: string }
+const configRoots = new WeakMap<GoahConfig, string>();
 
 export function loadConfig(path = "goah.config.json", options: { resolveSecrets?: boolean } = {}): GoahConfig {
   const absolute = resolve(path);
-  const config = JSON.parse(readFileSync(absolute, "utf8")) as GoahConfig;
+  const config = JSON.parse(readFileSync(absolute, "utf8")) as GoahConfig & { workspace?: string };
   if (config.version !== 1) throw new Error(`unsupported goah config version: ${String(config.version)}`);
   const base = dirname(absolute);
-  config.workspace = absolutePath(base, config.workspace);
+  const root = config.workspace ? absolutePath(base, config.workspace) : base;
+  delete config.workspace;
+  configRoots.set(config, root);
   config.stateDir = absolutePath(base, config.stateDir);
   config.runner.command = resolveCommand(config.runner.command);
   config.runner.args = config.runner.args.map((arg) => arg === "$GOAH_PI_WORKER" ? piWorkerPath() : arg);
@@ -54,9 +57,8 @@ export function createRuntime(config: GoahConfig): { ledger: SqliteLedger; super
   if (config.limits) assertRunLimits(config.limits);
   mkdirSync(config.stateDir, { recursive: true });
   const ledger = new SqliteLedger(join(config.stateDir, "ledger.sqlite"));
-  const runner = new ProcessRunner(config.runner);
+  const runner = new ProcessRunner({ ...config.runner, cwd: configRoot(config) });
   const supervisor = new Supervisor(ledger, runner, new class { now(): Date { return new Date(); } }(), {
-    workspace: new GitWorkspaceManager(config.workspace),
     ...(config.limits ? { limits: config.limits } : {}),
     ...(config.profiles ? { profiles: config.profiles } : {}),
     ...(config.approvers ? { approvers: config.approvers } : {}),
@@ -70,14 +72,13 @@ export function createRuntime(config: GoahConfig): { ledger: SqliteLedger; super
   return { ledger, supervisor };
 }
 
-export function defaultConfig(_directory: string, options: InitOptions = {}): GoahConfig {
+export function defaultConfig(directory: string, options: InitOptions = {}): GoahConfig {
   const provider = options.provider ?? "anthropic";
   const model = options.model ?? defaultModel(provider);
   const runnerEnv = providerEnvironment(provider, model, options);
   return {
     version: 1,
-    workspace: ".",
-    stateDir: ".goah",
+    stateDir: defaultStateDir(directory),
     runner: { command: process.execPath, args: ["$GOAH_PI_WORKER"], env: runnerEnv },
     limits: { maxTotalTokens: 2_000_000, maxWallClockMs: 3_600_000, handoffReserveTokens: 96_000, handoffReserveWallClockMs: 120_000 },
     profiles: [{ agent: options.agent ?? "worker", role: "child" }],
@@ -120,10 +121,10 @@ export function diagnoseConfig(config: GoahConfig): { ok: boolean; checks: Docto
     if (Number(process.versions.node.split(".")[0]) < 24) throw new Error(`Node ${process.versions.node} is unsupported; require >=24`);
     return process.versions.node;
   });
-  check("workspace", () => {
-    const result = spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd: config.workspace, encoding: "utf8" });
-    if (result.status !== 0 || result.stdout.trim() !== "true") throw new Error(result.stderr.trim() || "workspace is not a Git repository");
-    return config.workspace;
+  check("root", () => {
+    const root = configRoot(config);
+    accessSync(root, constants.R_OK | constants.W_OK);
+    return `${root} (runner-owned local execution)`;
   });
   check("state", () => {
     const existing = nearestExisting(config.stateDir);
@@ -138,7 +139,7 @@ export function diagnoseConfig(config: GoahConfig): { ok: boolean; checks: Docto
     }
     finally { db.close(); }
   });
-  check("limits", () => { assertRunLimits(config.limits ?? defaultConfig(config.workspace).limits!); return JSON.stringify(config.limits); });
+  check("limits", () => { assertRunLimits(config.limits ?? defaultConfig(configRoot(config)).limits!); return JSON.stringify(config.limits); });
   check("runner", () => {
     accessSync(config.runner.command, constants.X_OK);
     const workerArg = config.runner.args[0];
@@ -198,6 +199,10 @@ function providerEnvironment(provider: PiProvider, model: string, options: InitO
 }
 function requiredEnv(env: Record<string, string>, name: string): string { const value = env[name]; if (!value) throw new Error(`${name} is missing`); return value; }
 function nearestExisting(path: string): string { let current = resolve(path); while (!existsSync(current)) { const parent = dirname(current); if (parent === current) break; current = parent; } return current; }
+function defaultStateDir(directory: string): string {
+  const id = createHash("sha256").update(resolve(directory)).digest("hex").slice(0, 16);
+  return join(process.env.GOAH_STATE_HOME ?? join(homedir(), ".goah", "state"), id);
+}
 function field(value: unknown, key: string): unknown { return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined; }
 function assistantTokens(value: unknown): number {
   const message = field(value, "message");
@@ -209,4 +214,5 @@ function assistantTokens(value: unknown): number {
 function resolveCommand(command: string): string { return command === "$NODE" ? process.execPath : command; }
 function absolutePath(base: string, value: string): string { return isAbsolute(value) ? value : resolve(base, value); }
 function alive(pid: number): boolean { try { process.kill(pid, 0); return true; } catch { return false; } }
+export function configRoot(config: GoahConfig): string { return configRoots.get(config) ?? process.cwd(); }
 export { CONTRACT_VERSION };

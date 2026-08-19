@@ -40,7 +40,7 @@ export interface FauxStep {
 export class FauxPiDriver implements PiDriver {
   readonly requests: RunRequest[] = [];
   #sessions: FauxStep[][];
-  constructor(readonly clock: SimulatedClock, sessions: FauxStep[][]) { this.#sessions = sessions.map((steps) => [...steps]); }
+  constructor(readonly clock: SimulatedClock, sessions: FauxStep[][], readonly directory = process.cwd()) { this.#sessions = sessions.map((steps) => [...steps]); }
   async createSession(request: RunRequest): Promise<PiSession> {
     this.requests.push(request);
     const steps = this.#sessions.shift() ?? [];
@@ -52,8 +52,7 @@ export class FauxPiDriver implements PiDriver {
         if (mode.handoffOnly && step.write) throw new Error("ordinary tool call attempted in handoff reserve");
         if (step.advanceMs) this.clock.advance(step.advanceMs);
         if (step.write) {
-          if (!request.workspacePath) throw new Error("faux write has no workspace");
-          const path = join(request.workspacePath, step.write.path);
+          const path = join(this.directory, step.write.path);
           mkdirSync(dirname(path), { recursive: true });
           writeFileSync(path, step.write.content);
         }

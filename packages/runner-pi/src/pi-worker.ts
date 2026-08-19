@@ -38,8 +38,8 @@ export async function runPiWorker(): Promise<void> {
     let output: WakeOutput | null = null;
     let tokensUsed = 0;
     let compactions = 0;
-    const workspace = request.workspacePath ? resolve(request.workspacePath) : undefined;
-    const tools = createTools(workspace, (value) => { output = value; }, process.env.GOAH_PI_ALLOW_BASH === "true", rpc, request.wake.startedAt);
+    const root = resolve(process.cwd());
+    const tools = createTools(root, (value) => { output = value; }, process.env.GOAH_PI_ALLOW_BASH === "true", rpc, request.wake.startedAt);
     const contextPolicy = resolveContextPolicy(model.contextWindow, process.env);
     emit({ kind: "model.capabilities", data: { provider, model: modelId, contextWindowTokens: model.contextWindow, maxOutputTokensPerTurn: model.maxTokens, ...contextPolicy } });
     const suppliedPrompt = typeof request.context === "object" && request.context !== null && !Array.isArray(request.context) && typeof request.context.systemPrompt === "string" ? request.context.systemPrompt : undefined;
@@ -77,13 +77,13 @@ export async function runPiWorker(): Promise<void> {
       if (event.type === "message_end" && event.message.role === "assistant") tokensUsed += event.message.usage.totalTokens;
       emit({ kind: `pi.${event.type}`, data: JSON.parse(JSON.stringify(event)) as JsonValue });
     });
-    await agent.prompt(`Wake started at: ${request.wake.startedAt ?? "unknown"}\nWake context:\n${JSON.stringify(request.context)}\n\nWork in: ${workspace ?? "no workspace"}`);
+    await agent.prompt(`Wake started at: ${request.wake.startedAt ?? "unknown"}\nWake context:\n${JSON.stringify(request.context)}\n\nRunner root: ${root}. Manage local files and Git directly when the goal requires them.`);
     if (!output) return { outcome: "abnormal", reason: "Pi worker exited without a valid handoff", tokensUsed };
     return { outcome: "handoff", output, tokensUsed };
   });
 }
 
-function createTools(workspace: string | undefined, handoff: (output: WakeOutput) => void, allowBash: boolean, rpc: WorkerRpc, wakeStartedAt: string | null): AgentTool<any>[] {
+function createTools(root: string, handoff: (output: WakeOutput) => void, allowBash: boolean, rpc: WorkerRpc, wakeStartedAt: string | null): AgentTool<any>[] {
   const handoffTool: AgentTool<any> = {
     name: "handoff",
     label: "Handoff",
@@ -103,29 +103,28 @@ function createTools(workspace: string | undefined, handoff: (output: WakeOutput
     },
   };
   const rpcTools = createRpcTools(rpc);
-  if (!workspace) return [...rpcTools, handoffTool];
   const readTool: AgentTool<any> = {
-    name: "read_file", label: "Read file", description: "Read a UTF-8 file inside the wake workspace.",
+    name: "read_file", label: "Read file", description: "Read a UTF-8 file inside the local runner root.",
     parameters: Type.Object({ path: Type.String() }),
-    execute: async (_id, params) => { const input = params as { path: string }; return { content: [{ type: "text", text: await readFile(scoped(workspace, input.path), "utf8") }], details: {} }; },
+    execute: async (_id, params) => { const input = params as { path: string }; return { content: [{ type: "text", text: await readFile(scoped(root, input.path), "utf8") }], details: {} }; },
   };
   const writeTool: AgentTool<any> = {
-    name: "write_file", label: "Write file", description: "Write a UTF-8 file inside the wake workspace.",
+    name: "write_file", label: "Write file", description: "Write a UTF-8 file inside the local runner root.",
     parameters: Type.Object({ path: Type.String(), content: Type.String() }),
-    execute: async (_id, params) => { const input = params as { path: string; content: string }; const path = scoped(workspace, input.path); await mkdir(dirname(path), { recursive: true }); await writeFile(path, input.content); return { content: [{ type: "text", text: "written" }], details: {} }; },
+    execute: async (_id, params) => { const input = params as { path: string; content: string }; const path = scoped(root, input.path); await mkdir(dirname(path), { recursive: true }); await writeFile(path, input.content); return { content: [{ type: "text", text: "written" }], details: {} }; },
   };
   const noteTool: AgentTool<any> = {
-    name: "record_note", label: "Record note", description: "Append a durable workspace note. The tool result is also indexed in the ledger trace.",
+    name: "record_note", label: "Record note", description: "Append a durable runner note. The tool result is also indexed in the ledger trace.",
     parameters: Type.Object({ note: Type.String() }),
-    execute: async (_id, params) => { const input = params as { note: string }; await appendFile(scoped(workspace, ".goah-notes.md"), `${input.note}\n`); return { content: [{ type: "text", text: "note recorded" }], details: { note: input.note } }; },
+    execute: async (_id, params) => { const input = params as { note: string }; await appendFile(scoped(root, ".goah-notes.md"), `${input.note}\n`); return { content: [{ type: "text", text: "note recorded" }], details: { note: input.note } }; },
   };
   if (!allowBash) return [readTool, writeTool, noteTool, ...rpcTools, handoffTool];
   const bashTool: AgentTool<any> = {
-    name: "bash", label: "Bash", description: "Run a shell command in the wake workspace.",
+    name: "bash", label: "Bash", description: "Run a shell command inside the local runner root.",
     parameters: Type.Object({ command: Type.String() }), executionMode: "sequential",
     execute: async (_id, params, signal) => {
       const input = params as { command: string };
-      const result = await execFileAsync("/bin/sh", ["-lc", input.command], { cwd: workspace, signal, maxBuffer: 1_000_000 });
+      const result = await execFileAsync("/bin/sh", ["-lc", input.command], { cwd: root, signal, maxBuffer: 1_000_000 });
       return { content: [{ type: "text", text: `${result.stdout}${result.stderr}`.slice(-50_000) }], details: { command: input.command } };
     },
   };
@@ -193,9 +192,9 @@ function createRpcTools(rpc: WorkerRpc): AgentTool<any>[] {
   ];
 }
 
-function scoped(workspace: string, path: string): string {
-  const resolved = resolve(workspace, path);
-  if (resolved !== workspace && !resolved.startsWith(`${workspace}${sep}`)) throw new Error("path escapes workspace");
+function scoped(root: string, path: string): string {
+  const resolved = resolve(root, path);
+  if (resolved !== root && !resolved.startsWith(`${root}${sep}`)) throw new Error("path escapes runner root");
   return resolved;
 }
 function estimateMessages(messages: AgentMessage[]): number { return Math.ceil(JSON.stringify(messages).length / 4); }

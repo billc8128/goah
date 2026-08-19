@@ -20,8 +20,7 @@ await runProcessWorker(async (request, emit, rpc): Promise<RunnerResult> => {
   let tokensUsed = 0;
   for (const step of steps) {
     if (step.write) {
-      if (!request.workspacePath) throw new Error("worker write has no workspace");
-      const path = join(request.workspacePath, step.write.path);
+      const path = join(process.cwd(), step.write.path);
       mkdirSync(dirname(path), { recursive: true });
       writeFileSync(path, step.write.content);
     }

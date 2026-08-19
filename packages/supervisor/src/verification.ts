@@ -55,7 +55,7 @@ export class VerificationPlane {
   }
 
   async auditGlobal(sinceSeq = 0): Promise<{ blind: VerificationResult; reasoned: VerificationResult }> {
-    const facts = this.ledger.eventsSince(sinceSeq).filter((event) => !["handoff.recorded", "workspace.note"].includes(event.kind)).map(blindFact);
+    const facts = this.ledger.eventsSince(sinceSeq).filter((event) => !["handoff.recorded", "runner.note"].includes(event.kind)).map(blindFact);
     const blind = await this.model.blindAudit(facts);
     const reasons = this.ledger.actions().map((action) => ({ actionId: action.id, reason: action.reason, evidence: action.evidence }));
     const reasoned = await this.model.reasonAudit({ facts, reasons });

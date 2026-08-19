@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { discardWorkspaceRef, inspectWorkspaceRef, recoverWorkspaceRef } from "goah-supervisor";
 import { createRuntime, diagnoseConfig, loadConfig, statusSnapshot, SupervisorLock, type PiProvider, writeDefaultConfig } from "./index.js";
 
 const args = process.argv.slice(2);
@@ -71,9 +70,6 @@ async function main(): Promise<void> {
     else if (command === "approve") console.log(JSON.stringify(await supervisor.approveAction(requiredPositional(1, "action id"), option("--actor") ?? "human", required("--reason"), evidence()), null, 2));
     else if (command === "reject") console.log(JSON.stringify(supervisor.rejectAction(requiredPositional(1, "action id"), option("--actor") ?? "human", required("--reason"), evidence()), null, 2));
     else if (command === "dashboard") { const path = option("--output") ?? join(config.stateDir, "status.html"); writeFileSync(path, (await import("goah-supervisor")).renderDashboard(ledger)); console.log(path); }
-    else if (command === "workspace-inspect") console.log(inspectWorkspaceRef(config.workspace, requiredPositional(1, "workspace ref")));
-    else if (command === "workspace-recover") console.log(recoverWorkspaceRef(config.workspace, requiredPositional(1, "workspace ref"), required("--branch")));
-    else if (command === "workspace-discard") { if (option("--yes") !== "true") throw new Error("workspace-discard requires --yes true"); discardWorkspaceRef(config.workspace, requiredPositional(1, "workspace ref")); console.log("discarded"); }
     else throw new Error(`unknown command: ${command}`);
   } finally {
     runtime?.ledger.close();
@@ -92,7 +88,7 @@ goah goal-create --id ID --owner AGENT --objective TEXT [--wake-now]
 goah wake AGENT [--reason TEXT]
 goah run-once
 goah start | status | goal-list | action-list | approve | reject | dashboard
-goah workspace-inspect | workspace-recover | workspace-discard`);
+Runner file and Git operations execute locally under the directory containing goah.config.json.`);
 }
 function option(name: string): string | null { const index = args.indexOf(name); return index >= 0 ? args[index + 1] ?? null : null; }
 function flag(name: string): boolean { return args.includes(name); }
@@ -104,4 +100,4 @@ function providerOption(value: string): PiProvider {
   if (!["anthropic", "openai", "ark-coding", "faux"].includes(value)) throw new Error(`unsupported provider: ${value}`);
   return value as PiProvider;
 }
-function mutates(command: string): boolean { return ["start", "run-once", "wake", "goal-create", "approve", "reject", "workspace-recover", "workspace-discard"].includes(command); }
+function mutates(command: string): boolean { return ["start", "run-once", "wake", "goal-create", "approve", "reject"].includes(command); }

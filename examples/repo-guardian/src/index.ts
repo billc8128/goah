@@ -1,14 +1,17 @@
 import { mkdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CONTRACT_VERSION } from "goah-ledger-contract";
 import { SqliteLedger } from "goah-ledger-sqlite";
 import { piWorkerPath, ProcessRunner } from "goah-runner-pi";
-import { GitWorkspaceManager, renderDashboard, runSupervisorDaemon, Supervisor } from "goah-supervisor";
+import { renderDashboard, runSupervisorDaemon, Supervisor } from "goah-supervisor";
 import { fauxRunnerWorkerPath } from "goah-testkit";
 
 const repo = process.env.GOAH_GUARD_REPO ?? process.cwd();
-const stateDir = process.env.GOAH_GUARD_STATE ?? join(repo, ".goah");
+const stateId = createHash("sha256").update(repo).digest("hex").slice(0, 16);
+const stateDir = process.env.GOAH_GUARD_STATE ?? join(homedir(), ".goah", "repo-guardian", stateId);
 mkdirSync(stateDir, { recursive: true });
 const ledger = new SqliteLedger(join(stateDir, "guardian.sqlite"));
 const model = process.env.GOAH_PI_MODEL;
@@ -19,10 +22,9 @@ const piEnv = model ? {
   ...forwardEnv(["GOAH_PI_BASE_URL", "GOAH_PI_MODEL_CAPABILITIES", "GOAH_PI_COMPACT_AT_TOKENS", "GOAH_PI_RETAIN_CONTEXT_TOKENS", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ARK_API_KEY"]),
 } : null;
 const runner = new ProcessRunner(model
-  ? { command: process.execPath, args: [piWorkerPath()], env: piEnv! }
-  : { command: process.execPath, args: [fauxRunnerWorkerPath()], env: { GOAH_FAUX_STEPS: JSON.stringify([{ tokens: 10, handoff: { handoff: { observations: ["test status collected"], results: [], nextSteps: ["check again"] }, mail: [], nextWakeAt: new Date(Date.now() + 86_400_000).toISOString() } }]) } });
+  ? { command: process.execPath, args: [piWorkerPath()], cwd: repo, env: piEnv! }
+  : { command: process.execPath, args: [fauxRunnerWorkerPath()], cwd: repo, env: { GOAH_FAUX_STEPS: JSON.stringify([{ tokens: 10, handoff: { handoff: { observations: ["test status collected"], results: [], nextSteps: ["check again"] }, mail: [], nextWakeAt: new Date(Date.now() + 86_400_000).toISOString() } }]) } });
 const supervisor = new Supervisor(ledger, runner, new class { now(): Date { return new Date(); } }(), {
-  workspace: new GitWorkspaceManager(repo),
   ...(model ? { limits: {
     maxTotalTokens: Number(process.env.GOAH_PI_MAX_TOTAL_TOKENS ?? 2_000_000),
     maxWallClockMs: Number(process.env.GOAH_PI_MAX_WALL_CLOCK_MS ?? 3_600_000),
@@ -35,7 +37,7 @@ const supervisor = new Supervisor(ledger, runner, new class { now(): Date { retu
   profiles: [{
     agent: "guardian",
     role: "child",
-    systemPrompt: "Keep this repository's test metric green. Run the configured tests first. If they fail, diagnose from concrete output, make the smallest safe code change, rerun tests, record durable notes, and hand off only after verification. Never claim a repair without command evidence.",
+    systemPrompt: "Keep this repository's test metric green. Run the configured tests first. If they fail, diagnose from concrete output, make the smallest safe code change, rerun tests, and commit verified work with Git when appropriate. Manage branches or worktrees yourself when concurrent work could conflict. Never claim a repair without command evidence.",
   }],
 });
 
