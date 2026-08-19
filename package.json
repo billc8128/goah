@@ -2,6 +2,8 @@
   "name": "goah",
   "private": true,
   "version": "0.1.0",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "git+https://github.com/billc8128/goah.git" },
   "type": "module",
   "workspaces": [
     "packages/*",
@@ -14,7 +16,8 @@
     "test:soak": "npm run build && node --test --test-name-pattern='accelerated 30-day soak' packages/testkit/dist/index.test.js",
     "soak:real": "npm run build && node scripts/run-soak.mjs",
     "example": "npm run build && node examples/minimal/dist/index.js",
-    "example:guardian": "npm run build && node examples/repo-guardian/dist/index.js"
+    "example:guardian": "npm run build && node examples/repo-guardian/dist/index.js",
+    "pack:smoke": "npm run build && node scripts/pack-smoke.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

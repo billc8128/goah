@@ -1,6 +1,11 @@
 {
   "name": "@goah/testkit",
   "version": "0.1.0",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "git+https://github.com/billc8128/goah.git", "directory": "packages/testkit" },
+  "engines": { "node": ">=24.0.0" },
+  "files": ["dist", "!dist/**/*.test.*", "!dist/.tsbuildinfo"],
+  "publishConfig": { "access": "public" },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
