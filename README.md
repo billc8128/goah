@@ -64,14 +64,26 @@ npm run test:soak
 Initialize and operate a configured supervisor:
 
 ```bash
-npx goah init
+npm install --save-dev @goah/cli
+npx goah init --provider anthropic --model claude-sonnet-4-6
 npx goah doctor
-npx goah start
+npx goah goal-create --id first-goal --owner worker --objective "Complete the first verified handoff" --wake-now
+npx goah run-once
 npx goah status
-npx goah approve <action-id> --reason "approved" --evidence 12,18
 ```
 
-The example runs entirely offline: a simulated clock, an in-memory ledger, a faux driver instead of a real model, and a throwaway git repo. No API keys are involved anywhere in this codebase.
+`goah start` runs the resident supervisor after the one-shot path is healthy. `goah wake <agent>` queues a manual wake. Provider credentials stay as `env:NAME` references in `goah.config.json`; `doctor` resolves and validates them without printing them. For an offline installation check, use `goah init --provider faux`.
+
+Ark Coding Plan requires explicit model capabilities because its model-list API does not publish context/output limits:
+
+```bash
+npx goah init --provider ark-coding --model glm-5.2 \
+  --api-key-env ARK_API_KEY \
+  --context-window-tokens 256000 \
+  --max-output-tokens 32000
+```
+
+Replace those sample limits with the selected model's published values.
 
 ## How it works
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,14 +7,24 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { loadConfig, SupervisorLock } from "./index.js";
 
-test("CLI initializes versioned config, resolves secret references, and enforces singleton lock", () => {
+const cli = fileURLToPath(new URL("./cli.js", import.meta.url));
+
+function repository(): string {
   const directory = mkdtempSync(join(tmpdir(), "goah-cli-"));
   execFileSync("git", ["init", "-b", "main"], { cwd: directory });
   execFileSync("git", ["config", "user.email", "goah@example.test"], { cwd: directory });
   execFileSync("git", ["config", "user.name", "GOAH Test"], { cwd: directory });
   execFileSync("git", ["commit", "--allow-empty", "-m", "initial"], { cwd: directory });
-  const cli = fileURLToPath(new URL("./cli.js", import.meta.url));
-  execFileSync(process.execPath, [cli, "init"], { cwd: directory });
+  return directory;
+}
+
+function invoke(directory: string, ...args: string[]): string {
+  return execFileSync(process.execPath, [cli, ...args], { cwd: directory, encoding: "utf8" });
+}
+
+test("CLI initializes versioned config, resolves secret references, and enforces singleton lock", () => {
+  const directory = repository();
+  invoke(directory, "init");
   const initialized = JSON.parse(readFileSync(join(directory, "goah.config.json"), "utf8"));
   assert.equal(initialized.version, 1);
   assert.equal(initialized.limits.maxTotalTokens, 2_000_000);
@@ -29,4 +39,48 @@ test("CLI initializes versioned config, resolves secret references, and enforces
   assert.throws(() => new SupervisorLock(join(directory, ".goah")).acquire(), /already running/);
   lock.release();
   const next = new SupervisorLock(join(directory, ".goah")); next.acquire(); next.release();
+});
+
+test("CLI runs the install-to-first-handoff path with the faux provider", () => {
+  const directory = repository();
+  invoke(directory, "init", "--provider", "faux", "--agent", "worker");
+  const doctor = JSON.parse(invoke(directory, "doctor"));
+  assert.equal(doctor.ok, true);
+  assert.equal(doctor.checks.find((item: { name: string }) => item.name === "runner").detail.includes("faux/faux-goah"), true);
+  const created = JSON.parse(invoke(directory, "goal-create", "--id", "first", "--owner", "worker", "--objective", "Complete the first handoff", "--wake-now"));
+  assert.equal(created.goal.id, "first");
+  assert.equal(created.wake.status, "queued");
+  const run = JSON.parse(invoke(directory, "run-once"));
+  assert.equal(run.wake.status, "done");
+  const status = JSON.parse(invoke(directory, "status"));
+  assert.equal(status.goals[0].id, "first");
+  assert.equal(status.wakes.length, 1);
+  assert.equal(status.wakes[0].status, "done");
+  assert.equal(status.modelCapabilities.provider, "faux");
+  assert.equal(status.recentHandoffs.length, 1);
+  const queued = JSON.parse(invoke(directory, "wake", "worker", "--reason", "manual follow-up"));
+  assert.equal(queued.wake.status, "queued");
+  assert.equal(JSON.parse(invoke(directory, "run-once")).wake.status, "done");
+  assert.equal(JSON.parse(invoke(directory, "status")).wakes.length, 2);
+});
+
+test("CLI writes and diagnoses an explicit Ark model capability manifest", () => {
+  const directory = repository();
+  invoke(directory, "init", "--provider", "ark-coding", "--model", "glm-test", "--api-key-env", "GOAH_TEST_ARK_KEY", "--context-window-tokens", "256000", "--max-output-tokens", "32000");
+  const raw = JSON.parse(readFileSync(join(directory, "goah.config.json"), "utf8"));
+  assert.equal(raw.runner.env.ARK_API_KEY, "env:GOAH_TEST_ARK_KEY");
+  assert.deepEqual(JSON.parse(raw.runner.env.GOAH_PI_MODEL_CAPABILITIES), { contextWindowTokens: 256_000, maxOutputTokensPerTurn: 32_000 });
+  const missing = spawnSync(process.execPath, [cli, "doctor"], { cwd: directory, encoding: "utf8" });
+  assert.equal(missing.status, 1);
+  const missingResult = JSON.parse(missing.stdout);
+  assert.equal(missingResult.ok, false);
+  assert.match(missingResult.checks.find((item: { name: string }) => item.name === "runner").detail, /GOAH_TEST_ARK_KEY/);
+  process.env.GOAH_TEST_ARK_KEY = "secret";
+  try {
+    const doctor = JSON.parse(invoke(directory, "doctor"));
+    assert.equal(doctor.ok, true);
+    assert.match(doctor.checks.find((item: { name: string }) => item.name === "runner").detail, /context=256000 output=32000/);
+  } finally {
+    delete process.env.GOAH_TEST_ARK_KEY;
+  }
 });

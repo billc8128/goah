@@ -13,6 +13,8 @@ import {
   type WakeOutput,
 } from "@goah/ledger-contract";
 
+export { createPiModel, parseModelCapabilities } from "./model-provider.js";
+
 export interface PiStepRequest { handoffOnly: boolean; remainingTokens: number }
 export interface PiStep {
   tokensUsed: number;

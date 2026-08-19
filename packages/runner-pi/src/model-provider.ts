@@ -17,7 +17,7 @@ export interface ModelCapabilities {
   maxOutputTokensPerTurn: number;
 }
 
-export function createPiModel(provider: string, modelId: string): {
+export function createPiModel(provider: string, modelId: string, env: NodeJS.ProcessEnv = process.env): {
   models: ReturnType<typeof createModels>;
   model: Model<Api>;
   faux?: ReturnType<typeof fauxProvider>;
@@ -31,8 +31,8 @@ export function createPiModel(provider: string, modelId: string): {
     models.setProvider(openaiProvider());
     model = models.getModel(provider, modelId);
   } else if (provider === "ark-coding") {
-    const baseUrl = process.env.GOAH_PI_BASE_URL ?? ARK_CODING_BASE_URL;
-    const capabilities = parseModelCapabilities(process.env.GOAH_PI_MODEL_CAPABILITIES);
+    const baseUrl = env.GOAH_PI_BASE_URL ?? ARK_CODING_BASE_URL;
+    const capabilities = parseModelCapabilities(env.GOAH_PI_MODEL_CAPABILITIES);
     const arkModel: Model<"openai-responses"> = {
       id: modelId,
       name: modelId,

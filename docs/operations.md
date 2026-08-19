@@ -11,7 +11,7 @@ node examples/repo-guardian/dist/index.js --daemon
 npm run soak:real
 ```
 
-For a general installation, run `goah init`, edit the generated `goah.config.json`, then use `goah doctor` and `goah start`. Secret values use `env:NAME` references and are resolved only when the process spec is created. Human controls include goal creation, action approval/rejection, dashboard generation, and `workspace-inspect`, `workspace-recover`, and guarded `workspace-discard` commands.
+For a general installation, run `goah init --provider <provider> --model <id>`, then use `goah doctor`. The first bounded path is `goal-create --wake-now` followed by `run-once` and `status`; use `goah start` only after that succeeds. Secret values use `env:NAME` references and are resolved only when the process spec is created. Human controls include manual `wake`, goal creation, action approval/rejection, dashboard generation, and `workspace-inspect`, `workspace-recover`, and guarded `workspace-discard` commands.
 
 Runner RPC is bidirectional but fenced by the active wake lease. Default child capabilities cover ledger search, budget reads, mail, scheduling, actions, and advice acknowledgement. Only CEO profiles can write child goals; verifier/audit profiles can write audit advice.
 
