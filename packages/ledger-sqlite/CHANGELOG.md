@@ -2,7 +2,7 @@
 
 ## 0.2.0
 
-- Updated in lockstep with the runner-owned execution contract; SQLite schema remains version 4.
+- Schema v5 removes the legacy goal budget column while preserving old goal projections during migration.
 
 ## 0.1.0
 

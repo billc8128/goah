@@ -5,7 +5,7 @@
 
 ## Decision
 
-The GOAH core does not model workspaces, artifacts, files, or Git. The supervisor owns control state only: goals, wakes, leases, process lifetime, actions, mail, budgets, and handoffs.
+The GOAH core does not model workspaces, artifacts, files, Git, or domain-specific monetary budgets. The supervisor owns control state only: goals, wakes, leases, process lifetime, actions, mail, and handoffs.
 
 Each process runner executes under a local root chosen by its configuration. File, bash, and Git behavior belongs to the runner and its skills. Coding agents may create repositories, branches, commits, or worktrees directly; operational agents can ignore the filesystem entirely.
 

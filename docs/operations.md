@@ -13,7 +13,7 @@ npm run soak:real
 
 For a general installation, run `goah init --provider <provider> --model <id>`, then use `goah doctor`. The first bounded path is `goal-create --wake-now` followed by `run-once` and `status`; use `goah start` only after that succeeds. Secret values use `env:NAME` references and are resolved only when the process spec is created. The runner executes locally under the directory containing `goah.config.json`; Git behavior belongs in the selected coding skill. Control state defaults to `~/.goah/state/<project-hash>` and can be relocated with `GOAH_STATE_HOME`. Human controls include manual `wake`, goal creation, action approval/rejection, and dashboard generation.
 
-Runner RPC is bidirectional but fenced by the active wake lease. Default child capabilities cover ledger search, budget reads, mail, scheduling, actions, and advice acknowledgement. Only CEO profiles can write child goals; verifier/audit profiles can write audit advice.
+Runner RPC is bidirectional but fenced by the active wake lease. Default child capabilities cover ledger search, mail, scheduling, actions, and advice acknowledgement. Only CEO profiles can write child goals; verifier/audit profiles can write audit advice.
 
 Set `GOAH_GUARD_REPO`, `GOAH_GUARD_STATE`, and optionally `GOAH_GUARD_TEST_COMMAND`. To use a real Pi worker, explicitly pass `GOAH_PI_MODEL`, `GOAH_PI_PROVIDER`, and the matching provider key. Without them the example uses the faux process worker and has no network dependency.
 

@@ -2,7 +2,7 @@
 
 ## 0.2.0
 
-- Removed workspace/Git lifecycle management from the supervisor; abnormal recovery preserves control state only.
+- Removed workspace/Git lifecycle management and monetary budget policy from the supervisor; abnormal recovery preserves control state only.
 
 ## 0.1.0
 

@@ -36,7 +36,7 @@ Implemented and tested today:
 - Real runner subprocess boundary with token/wall-clock limits, a handoff reserve zone, process-group termination, and stale-event rejection
 - Mail acknowledged atomically with a valid handoff; abnormal wakes leave messages unread for redelivery
 - Injected clocks, schema v1→v3 migration, indexed bounded queries, and a public ledger conformance suite
-- Mechanical metric evaluation (missing/stale/sustain/guardrails), heartbeat escalation, trigger coalescing, FTS5 fact search, and goal-budget reservation windows
+- Mechanical metric evaluation (missing/stale/sustain/guardrails), heartbeat escalation, trigger coalescing, FTS5 fact search, and generic evidence-backed actions
 - Official Pi 0.84.2 worker binding with local file/bash tools and model-view-only mid-turn compaction
 - Concurrent child agents, CEO global context, resident daemon loop, and a static read-only dashboard
 - Session verifier plus blind-first global audit interfaces, audit-advice delivery, and precision/risk-weighted-recall evaluation
@@ -164,7 +164,7 @@ Not guaranteed, by design honesty:
 | 1B — long-wake continuity | ✅ implementation complete: model-view compaction and accelerated continuity tests; real 10h soak still operational evidence |
 | 2 — narrow closed loop | ✅ repo-guardian implementation complete; real unattended 14-day run still operational evidence |
 | 3 — verification layer | ✅ verifier/global-audit interfaces, blind-first isolation and evaluation implemented; production calibration dataset remains operational work |
-| 4 — multi-agent | ✅ concurrent agents, CEO context, mailbox, budgets and dashboard implemented; real-money trial requires explicit human authorization |
+| 4 — multi-agent | ✅ concurrent agents, CEO context, mailbox and dashboard implemented; domain policies remain extension-owned |
 
 ## Design
 

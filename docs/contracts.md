@@ -7,6 +7,6 @@ All public packages evolve in lockstep under `CONTRACT_VERSION`. The current con
 - RPC: request/response IDs over the runner pipe; supervisor validates the active lease and role capability before every read or mutation.
 - Load: bounded role-specific context; unacknowledged audit advice is mandatory and raw hidden reasoning is never reloaded.
 - Handoff: observations, results, next steps, optional blocker, mail, and next wake.
-- Connector: process-isolated capability manifest declaring idempotency, query behavior, retry policy, risk, and parameter constraints.
+- Connector: process-isolated capability manifest declaring idempotency, query behavior, retry policy, and generic approval risk. Payload policy belongs to the connector or an extension.
 
 Third-party ledgers should run `assertLedgerConformance()` from `goah-testkit`.
