@@ -18,7 +18,7 @@ import {
   type ProjectionName,
   type ScheduleSnapshot,
   type WakeSnapshot,
-} from "@goah/ledger-contract";
+} from "goah-ledger-contract";
 
 type FaultPoint = "after_event_before_projection";
 type FaultInjector = (point: FaultPoint) => void;

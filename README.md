@@ -129,11 +129,11 @@ requested ─▶ approved ─▶ dispatching ─▶ confirmed
 
 | Package | Depends on | What it is |
 |---|---|---|
-| `@goah/ledger-contract` | nothing | The contract: types, state machines, schema assertions. Agent-side code depends only on this. |
-| `@goah/ledger-sqlite` | contract | Single-writer SQLite ledger. Append-only events enforced by triggers, projections rebuildable from events. |
-| `@goah/supervisor` | contract | Scheduler, wake lifecycle, action gate, connector dispatch, git workspace manager. Never executes user code in-process. |
-| `@goah/runner-pi` | contract | Worker-side Pi adapter plus supervisor-side `ProcessRunner`: IPC, timeout termination, handoff reserve, and trace forwarding. |
-| `@goah/testkit` | all of the above | Simulated clock, faux process worker, isolated mock connector, public ledger conformance suite, and fault injection. |
+| `goah-ledger-contract` | nothing | The contract: types, state machines, schema assertions. Agent-side code depends only on this. |
+| `goah-ledger-sqlite` | contract | Single-writer SQLite ledger. Append-only events enforced by triggers, projections rebuildable from events. |
+| `goah-supervisor` | contract | Scheduler, wake lifecycle, action gate, connector dispatch, git workspace manager. Never executes user code in-process. |
+| `goah-runner-pi` | contract | Worker-side Pi adapter plus supervisor-side `ProcessRunner`: IPC, timeout termination, handoff reserve, and trace forwarding. |
+| `goah-testkit` | all of the above | Simulated clock, faux process worker, isolated mock connector, public ledger conformance suite, and fault injection. |
 | `goah` | contract, SQLite, runner, supervisor | Versioned config, singleton daemon, status/doctor, goals, approvals, dashboard, and recovery refs. |
 
 ## Security model

@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
-import type { ActionSnapshot } from "@goah/ledger-contract";
+import type { ActionSnapshot } from "goah-ledger-contract";
 
 const execFileAsync = promisify(execFile);
 const input = createInterface({ input: process.stdin });

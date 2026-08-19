@@ -1,5 +1,5 @@
 {
-  "name": "@goah/ledger-contract",
+  "name": "goah-ledger-contract",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "repository": { "type": "git", "url": "git+https://github.com/billc8128/goah.git", "directory": "packages/ledger-contract" },

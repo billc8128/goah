@@ -9,4 +9,4 @@ All public packages evolve in lockstep under `CONTRACT_VERSION`. The current con
 - Handoff: observations, results, next steps, optional blocker, mail, and next wake.
 - Connector: process-isolated capability manifest declaring idempotency, query behavior, retry policy, risk, and parameter constraints.
 
-Third-party ledgers should run `assertLedgerConformance()` from `@goah/testkit`.
+Third-party ledgers should run `assertLedgerConformance()` from `goah-testkit`.

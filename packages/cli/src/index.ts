@@ -2,10 +2,10 @@ import { accessSync, constants, existsSync, mkdirSync, openSync, closeSync, read
 import { spawnSync } from "node:child_process";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { CONTRACT_VERSION, assertRunLimits, evaluateMetric, type AgentProfile, type ConnectorManifest, type MetricProcessSpec, type RunLimits } from "@goah/ledger-contract";
-import { SQLITE_SCHEMA_VERSION, SqliteLedger } from "@goah/ledger-sqlite";
-import { createPiModel, piWorkerPath, ProcessRunner } from "@goah/runner-pi";
-import { GitWorkspaceManager, renderDashboard, runSupervisorDaemon, Supervisor } from "@goah/supervisor";
+import { CONTRACT_VERSION, assertRunLimits, evaluateMetric, type AgentProfile, type ConnectorManifest, type MetricProcessSpec, type RunLimits } from "goah-ledger-contract";
+import { SQLITE_SCHEMA_VERSION, SqliteLedger } from "goah-ledger-sqlite";
+import { createPiModel, piWorkerPath, ProcessRunner } from "goah-runner-pi";
+import { GitWorkspaceManager, renderDashboard, runSupervisorDaemon, Supervisor } from "goah-supervisor";
 
 export interface GoahConfig {
   version: 1;

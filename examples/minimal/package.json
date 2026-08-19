@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@goah/ledger-contract": "0.1.0",
-    "@goah/ledger-sqlite": "0.1.0",
-    "@goah/runner-pi": "0.1.0",
-    "@goah/supervisor": "0.1.0",
-    "@goah/testkit": "0.1.0"
+    "goah-ledger-contract": "0.1.0",
+    "goah-ledger-sqlite": "0.1.0",
+    "goah-runner-pi": "0.1.0",
+    "goah-supervisor": "0.1.0",
+    "goah-testkit": "0.1.0"
   }
 }

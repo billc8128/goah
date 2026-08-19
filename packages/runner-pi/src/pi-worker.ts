@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { Agent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage, fauxToolCall, Type, type Message } from "@earendil-works/pi-ai";
-import type { AgentCapability, JsonValue, RunnerResult, WakeOutput } from "@goah/ledger-contract";
+import type { AgentCapability, JsonValue, RunnerResult, WakeOutput } from "goah-ledger-contract";
 import { runProcessWorker, type WorkerRpc } from "./index.js";
 import { createPiModel, providerApiKey } from "./model-provider.js";
 

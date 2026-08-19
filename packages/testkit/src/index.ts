@@ -11,9 +11,9 @@ import {
   type Ledger,
   type RunRequest,
   type WakeOutput,
-} from "@goah/ledger-contract";
-import { SqliteLedger, type SqliteLedgerOptions } from "@goah/ledger-sqlite";
-import type { PiDriver, PiSession, PiStepRequest } from "@goah/runner-pi";
+} from "goah-ledger-contract";
+import { SqliteLedger, type SqliteLedgerOptions } from "goah-ledger-sqlite";
+import type { PiDriver, PiSession, PiStepRequest } from "goah-runner-pi";
 
 export class SimulatedClock implements Clock {
   #value: Date;

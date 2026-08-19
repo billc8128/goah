@@ -1,11 +1,11 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CONTRACT_VERSION } from "@goah/ledger-contract";
-import { SqliteLedger } from "@goah/ledger-sqlite";
-import { piWorkerPath, ProcessRunner } from "@goah/runner-pi";
-import { GitWorkspaceManager, renderDashboard, runSupervisorDaemon, Supervisor } from "@goah/supervisor";
-import { fauxRunnerWorkerPath } from "@goah/testkit";
+import { CONTRACT_VERSION } from "goah-ledger-contract";
+import { SqliteLedger } from "goah-ledger-sqlite";
+import { piWorkerPath, ProcessRunner } from "goah-runner-pi";
+import { GitWorkspaceManager, renderDashboard, runSupervisorDaemon, Supervisor } from "goah-supervisor";
+import { fauxRunnerWorkerPath } from "goah-testkit";
 
 const repo = process.env.GOAH_GUARD_REPO ?? process.cwd();
 const stateDir = process.env.GOAH_GUARD_STATE ?? join(repo, ".goah");

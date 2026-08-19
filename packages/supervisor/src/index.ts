@@ -25,7 +25,7 @@ import {
   type RunnerHandle,
   type ScheduleSnapshot,
   type WakeSnapshot,
-} from "@goah/ledger-contract";
+} from "goah-ledger-contract";
 import { defaultRolePrompt } from "./roles.js";
 
 export interface WorkspaceResult { status: "merged" | "merge_blocked"; commitSha: string; ref?: string }

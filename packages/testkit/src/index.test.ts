@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { CONTRACT_VERSION, type GoalSnapshot, type WakeSnapshot } from "@goah/ledger-contract";
-import { piWorkerPath, ProcessRunner, verificationWorkerPath } from "@goah/runner-pi";
-import { calibrateVerificationThreshold, discardWorkspaceRef, evaluateVerification, GitWorkspaceManager, inspectWorkspaceRef, ProcessVerifierModel, recoverWorkspaceRef, renderDashboard, runSupervisorDaemon, Supervisor, VerificationPlane, type VerifierModel } from "@goah/supervisor";
+import { CONTRACT_VERSION, type GoalSnapshot, type WakeSnapshot } from "goah-ledger-contract";
+import { piWorkerPath, ProcessRunner, verificationWorkerPath } from "goah-runner-pi";
+import { calibrateVerificationThreshold, discardWorkspaceRef, evaluateVerification, GitWorkspaceManager, inspectWorkspaceRef, ProcessVerifierModel, recoverWorkspaceRef, renderDashboard, runSupervisorDaemon, Supervisor, VerificationPlane, type VerifierModel } from "goah-supervisor";
 import { assertLedgerConformance, createMemoryLedger, fauxRunnerWorkerPath, MockConnector, SimulatedClock } from "./index.js";
 
 const metric = { source: "test", window: "1h", direction: "at_least" as const, target: 1, freshnessMs: 60_000, onMissing: "abnormal" as const, onStale: "wake_owner" as const };

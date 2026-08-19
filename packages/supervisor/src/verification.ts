@@ -1,4 +1,4 @@
-import type { ActionSnapshot, EventRecord, JsonValue, Ledger } from "@goah/ledger-contract";
+import type { ActionSnapshot, EventRecord, JsonValue, Ledger } from "goah-ledger-contract";
 import { spawn } from "node:child_process";
 import type { Supervisor } from "./index.js";
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { discardWorkspaceRef, inspectWorkspaceRef, recoverWorkspaceRef } from "@goah/supervisor";
+import { discardWorkspaceRef, inspectWorkspaceRef, recoverWorkspaceRef } from "goah-supervisor";
 import { createRuntime, diagnoseConfig, loadConfig, statusSnapshot, SupervisorLock, type PiProvider, writeDefaultConfig } from "./index.js";
 
 const args = process.argv.slice(2);
@@ -70,7 +70,7 @@ async function main(): Promise<void> {
     } else if (command === "action-list") console.log(JSON.stringify(ledger.actions(), null, 2));
     else if (command === "approve") console.log(JSON.stringify(await supervisor.approveAction(requiredPositional(1, "action id"), option("--actor") ?? "human", required("--reason"), evidence()), null, 2));
     else if (command === "reject") console.log(JSON.stringify(supervisor.rejectAction(requiredPositional(1, "action id"), option("--actor") ?? "human", required("--reason"), evidence()), null, 2));
-    else if (command === "dashboard") { const path = option("--output") ?? join(config.stateDir, "status.html"); writeFileSync(path, (await import("@goah/supervisor")).renderDashboard(ledger)); console.log(path); }
+    else if (command === "dashboard") { const path = option("--output") ?? join(config.stateDir, "status.html"); writeFileSync(path, (await import("goah-supervisor")).renderDashboard(ledger)); console.log(path); }
     else if (command === "workspace-inspect") console.log(inspectWorkspaceRef(config.workspace, requiredPositional(1, "workspace ref")));
     else if (command === "workspace-recover") console.log(recoverWorkspaceRef(config.workspace, requiredPositional(1, "workspace ref"), required("--branch")));
     else if (command === "workspace-discard") { if (option("--yes") !== "true") throw new Error("workspace-discard requires --yes true"); discardWorkspaceRef(config.workspace, requiredPositional(1, "workspace ref")); console.log("discarded"); }
@@ -82,7 +82,7 @@ async function main(): Promise<void> {
 }
 
 async function run(supervisor: ReturnType<typeof createRuntime>["supervisor"], signal: AbortSignal): Promise<void> {
-  const { runSupervisorDaemon } = await import("@goah/supervisor");
+  const { runSupervisorDaemon } = await import("goah-supervisor");
   await runSupervisorDaemon(supervisor, { signal });
 }
 function printHelp(): void {

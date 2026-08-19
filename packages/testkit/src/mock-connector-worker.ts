@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
-import type { ActionSnapshot } from "@goah/ledger-contract";
+import type { ActionSnapshot } from "goah-ledger-contract";
 
 const statePath = process.env.GOAH_MOCK_CONNECTOR_STATE;
 if (!statePath) throw new Error("GOAH_MOCK_CONNECTOR_STATE is required");

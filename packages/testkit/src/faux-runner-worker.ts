@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { runProcessWorker } from "@goah/runner-pi";
-import type { JsonValue, RunnerResult, WakeOutput } from "@goah/ledger-contract";
+import { runProcessWorker } from "goah-runner-pi";
+import type { JsonValue, RunnerResult, WakeOutput } from "goah-ledger-contract";
 
 interface WorkerStep {
   tokens: number;
@@ -11,7 +11,7 @@ interface WorkerStep {
   crash?: string;
   hang?: boolean;
   delayMs?: number;
-  rpc?: { method: import("@goah/ledger-contract").AgentCapability; params: JsonValue };
+  rpc?: { method: import("goah-ledger-contract").AgentCapability; params: JsonValue };
 }
 
 await runProcessWorker(async (request, emit, rpc): Promise<RunnerResult> => {

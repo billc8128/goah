@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { RunRequest, WakeSnapshot, WakeOutput } from "@goah/ledger-contract";
+import type { RunRequest, WakeSnapshot, WakeOutput } from "goah-ledger-contract";
 import { PiRunnerAdapter, ProcessRunner, type PiDriver } from "./index.js";
 import { compactMessages, compactMessagesToTokenBudget, resolveContextPolicy, validateNextWakeAt } from "./pi-worker.js";
 import { createPiModel, providerApiKey } from "./model-provider.js";

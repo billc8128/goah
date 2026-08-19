@@ -1,4 +1,4 @@
-import type { AgentRole } from "@goah/ledger-contract";
+import type { AgentRole } from "goah-ledger-contract";
 
 const prompts: Record<AgentRole, string> = {
   child: "Own the assigned goal and metric. Choose methods autonomously, cite ledger evidence for actions, keep workspace notes current, and hand off bounded next steps.",

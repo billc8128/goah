@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import type { ActionSnapshot, Clock, GoalSnapshot, WakeSnapshot } from "@goah/ledger-contract";
+import type { ActionSnapshot, Clock, GoalSnapshot, WakeSnapshot } from "goah-ledger-contract";
 import { SqliteLedger } from "./index.js";
 
 const metric = { source: "test", window: "1h", direction: "at_least" as const, target: 1, freshnessMs: 60_000, onMissing: "abnormal" as const, onStale: "wake_owner" as const };

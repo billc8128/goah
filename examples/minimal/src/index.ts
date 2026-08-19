@@ -2,9 +2,9 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { ProcessRunner } from "@goah/runner-pi";
-import { GitWorkspaceManager, Supervisor } from "@goah/supervisor";
-import { createMemoryLedger, fauxRunnerWorkerPath, SimulatedClock } from "@goah/testkit";
+import { ProcessRunner } from "goah-runner-pi";
+import { GitWorkspaceManager, Supervisor } from "goah-supervisor";
+import { createMemoryLedger, fauxRunnerWorkerPath, SimulatedClock } from "goah-testkit";
 
 const clock = new SimulatedClock();
 const ledger = createMemoryLedger({ clock });

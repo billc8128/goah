@@ -11,7 +11,7 @@ import {
   type RunnerHandle,
   type RunnerResult,
   type WakeOutput,
-} from "@goah/ledger-contract";
+} from "goah-ledger-contract";
 
 export { createPiModel, parseModelCapabilities } from "./model-provider.js";
 
