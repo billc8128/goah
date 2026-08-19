@@ -24,12 +24,12 @@ goah does not replace your agent runner (pi, or any runner that implements the `
 
 ## Status
 
-**Experimental.** Contracts are `0.3.0` / `experimental`. SQLite schema changes use explicit, version-checked migrations; public TypeScript contracts may still change before 1.0.
+**Experimental.** Contracts are `0.4.0` / `experimental`. SQLite schema changes use explicit, version-checked migrations; public TypeScript contracts may still change before 1.0.
 
 Implemented and tested today:
 
-- Stream-aware append-only SQLite event kernel with global `seq`, contiguous per-stream `streamSeq`, and five standard execution-module projections (`goals`, `schedule`, `wakes`, `mailbox`, `actions`)
-- Replayable session vocabulary for exact request snapshots, user/assistant/tool events, compaction replacements, completed transcripts, and interrupted-tool `unknown` repair
+- Stream-aware append-only SQLite event kernel with global `seq`, contiguous per-stream `streamSeq`, required/ignorable event semantics, and five standard execution-module projections (`goals`, `schedule`, `wakes`, `mailbox`, `actions`)
+- Versioned replayable Session vocabulary with a v0→v1 upgrader, future-version refusal, exact request snapshots, user/assistant/tool events, compaction replacements, and interrupted-tool `unknown` repair
 - Deterministic Active Context composition: structured projections render to short Markdown, and the exact model-visible value is retained by `request.prepared`
 - FIFO wake lifecycle with leases: per-agent concurrency of one, trigger deduplication, fencing tokens, recorded runner PIDs, and kill-before-recovery semantics
 - Action state machine with real evidence validation, human approval/rejection, `unknown` semantics, and query-based reconciliation
@@ -38,7 +38,7 @@ Implemented and tested today:
 - Runner-owned local execution: non-software goals need no Git, while coding agents can use ordinary Git and worktree commands through their skills
 - Real runner subprocess boundary with sliding lease renewal, process-group termination, optional runner-specific timeout, and stale-event rejection
 - Mail acknowledged atomically with a valid handoff; abnormal wakes leave messages unread for redelivery
-- Injected clocks, schema v1→v5 migration into schema v6, indexed bounded queries, and a public ledger conformance suite
+- Injected clocks, schema v1→v6 migration into schema v7, indexed bounded queries, and a public ledger conformance suite
 - Optional mechanical metric evaluation (missing/stale/sustain/guardrails), heartbeat escalation, trigger coalescing, FTS5 fact search, and generic evidence-backed actions; Goal itself has no required metric or target
 - Official Pi 0.84.2 worker binding with local file/bash tools and model-view-only mid-turn compaction
 - Concurrent child agents, CEO global context, resident daemon loop, and a static read-only dashboard
@@ -73,6 +73,11 @@ npm install --save-dev @goah/cli
 npx goah init --provider anthropic --model claude-sonnet-4-6
 npx goah doctor
 npx goah goal-create --id first-goal --owner worker --objective "Complete the first verified handoff" --wake-now
+npx goah goal-show first-goal
+npx goah goal-update first-goal --objective "Updated objective"
+npx goah goal-pause first-goal
+npx goah goal-resume first-goal
+npx goah goal-complete first-goal
 npx goah run-once
 npx goah status
 ```
@@ -181,8 +186,8 @@ Not guaranteed, by design honesty:
 
 | Milestone | Scope |
 |---|---|
-| v2 ledger kernel | ✅ stream-aware event schema, SQLite v1–v5 migration, transaction fault injection |
-| replayable Session | ✅ normalized Pi messages/tools/requests, compaction facts, replay and interrupted-tool repair |
+| v2 ledger kernel | ✅ stream-aware event schema, required/ignorable events, SQLite v1–v6 migration, transaction fault injection |
+| replayable Session | ✅ format v1, legacy upgrader, normalized Pi messages/tools/requests, compaction facts, replay and interrupted-tool repair |
 | Active Context | ✅ deterministic Markdown composition with evidence source sequences |
 | execution modules | ✅ Goal/Wake/Schedule/Mailbox/Action/Handoff contracts are layered above the generic kernel; further physical package splitting is intentionally deferred |
 | 2 — narrow closed loop | ✅ repo-guardian implementation complete; real unattended 14-day run still operational evidence |

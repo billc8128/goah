@@ -23,11 +23,25 @@ test("event and projection roll back together at the injected transaction bounda
 
 test("global event order and per-stream order are both monotonic", () => {
   const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
-  const records = ledger.appendEvents([event("a", "one"), event("b", "other"), event("a", "two")]);
+  const records = ledger.appendEvents([event("a", "one"), event("b", "other"), { ...event("a", "two"), ignorable: true }]);
   assert.deepEqual(records.map((record) => record.seq), [1, 2, 3]);
   assert.deepEqual(ledger.readStream(controlStream("a")).map((record) => record.streamSeq), [1, 2]);
+  assert.equal(ledger.readStream(controlStream("a"))[1]?.ignorable, true);
   assert.deepEqual(ledger.readStream(controlStream("b")).map((record) => record.streamSeq), [1]);
   ledger.close();
+});
+
+test("schema v6 adds the ignorable event envelope and goal phase constraints", () => {
+  const path = join(mkdtempSync(join(tmpdir(), "goah-v6-")), "ledger.sqlite");
+  new SqliteLedger(path, { clock: new FixedClock() }).close();
+  const raw = new DatabaseSync(path);
+  raw.exec("DROP TRIGGER events_fts_insert; DROP TRIGGER events_no_update; DROP TRIGGER events_no_delete; ALTER TABLE events DROP COLUMN ignorable; PRAGMA user_version=6");
+  raw.close();
+  const migrated = new SqliteLedger(path, { clock: new FixedClock() });
+  const columns = (migrated.db.prepare("PRAGMA table_info(events)").all() as Array<{ name: string }>).map((row) => row.name);
+  assert.equal(columns.includes("ignorable"), true);
+  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 7);
+  migrated.close();
 });
 
 test("schema has events plus five projections and replay reproduces all of them", () => {
@@ -149,7 +163,7 @@ test("schema v1 is migrated without rewriting event history", () => {
   assert.equal(ledger.wake("w")?.enqueuedSeq, 1);
   assert.match(ledger.wake("w")?.leaseToken ?? "", /^legacy:/);
   assert.equal(ledger.action("a")?.connector, "legacy");
-  assert.equal((ledger.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 6);
+  assert.equal((ledger.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 7);
   assert.equal(ledger.events().length, 2);
   ledger.rebuildProjections();
   assert.equal(ledger.wake("w")?.enqueuedSeq, 1);
@@ -167,7 +181,7 @@ test("schema v2 migration builds the FTS index from existing events", () => {
   raw.close();
   const migrated = new SqliteLedger(path, { clock: new FixedClock() });
   assert.equal(migrated.searchEvents("migrationsearchterm").length, 1);
-  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 6);
+  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 7);
   migrated.close();
 });
 
@@ -182,7 +196,7 @@ test("schema v3 migration indexes coalesced wake triggers", () => {
   raw.close();
   const migrated = new SqliteLedger(path, { clock: new FixedClock() });
   assert.equal(migrated.wakeByTrigger("a", "metric:g:missing:none")?.id, "w");
-  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 6);
+  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 7);
   migrated.close();
 });
 
@@ -200,7 +214,7 @@ test("schema v4 migration removes the legacy goal budget column", () => {
   assert.equal("budget" in migrated.goal("legacy")!, false);
   const columns = (migrated.db.prepare("PRAGMA table_info(goals)").all() as Array<{ name: string }>).map((row) => row.name);
   assert.equal(columns.includes("budget"), false);
-  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 6);
+  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 7);
   migrated.close();
 });
 
@@ -210,6 +224,16 @@ test("goal parent cannot be changed during an update", () => {
   ledger.putGoal({ id: "p2", parentId: null, objective: "p2", owner: "other", phase: "active", revision: 0 }, "human");
   ledger.putGoal({ id: "child", parentId: "p1", objective: "c", owner: "child", phase: "active", revision: 0 }, "owner");
   assert.throws(() => ledger.putGoal({ id: "child", parentId: "p2", objective: "c", owner: "child", phase: "active", revision: 1 }, "owner"), /reparenting/);
+  ledger.close();
+});
+
+test("goal phases are constrained by both contract and SQLite", () => {
+  const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
+  ledger.putGoal({ id: "root", parentId: null, objective: "ship", owner: "owner", phase: "active", revision: 0 }, "human");
+  ledger.putGoal({ id: "root", parentId: null, objective: "ship", owner: "owner", phase: "paused", revision: 1 }, "human");
+  ledger.putGoal({ id: "root", parentId: null, objective: "ship", owner: "owner", phase: "complete", revision: 2 }, "human");
+  assert.throws(() => ledger.putGoal({ id: "root", parentId: null, objective: "ship", owner: "owner", phase: "active", revision: 3 }, "human"), /invalid goal transition/);
+  assert.throws(() => ledger.db.prepare("UPDATE goals SET phase='active' WHERE id='root'").run(), /invalid goal transition/);
   ledger.close();
 });
 

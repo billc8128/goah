@@ -12,10 +12,10 @@
 </head>
 <body><main>
 <header>
-  <div class="eyebrow">GOAH ARCHITECTURE · V2.0 · 2026-08-19</div>
+  <div class="eyebrow">GOAH ARCHITECTURE · V2.1 · 2026-08-19</div>
   <h1>Goah</h1>
   <p>一个面向长期目标的 Agent Harness。单次 Agent runtime 负责推理和工具调用；Goah 负责把原始事实持久化、在崩溃后恢复执行，并在下一次唤醒时生成短而可信的工作上下文。</p>
-  <p class="note">本文是当前产品与架构事实源，对应 Goah 0.3.x。<a href="./北辰-harness-设计稿.html">北辰 Harness v0.10</a>仅保留为历史方案。</p>
+  <p class="note">本文是当前产品与架构事实源，对应 Goah 0.4.x。<a href="./北辰-harness-设计稿.html">北辰 Harness v0.10</a>仅保留为历史方案。</p>
 </header>
 
 <section>
@@ -62,6 +62,7 @@ next model request</pre>
   actor: string
   type: string
   data: JsonValue
+  ignorable?: true   // 仅纯信息事件可声明陌生 reader 安全跳过
 }</pre>
 <ul>
   <li><code>seq</code> 给出整个组织的一致历史；<code>streamSeq</code> 检测某个 Session 或 aggregate 是否缺事件。</li>
@@ -89,6 +90,7 @@ next model request</pre>
 <tr><td><code>session.completed / interrupted</code></td><td>正常终止或恢复时关闭中断 Session</td></tr>
 </tbody></table>
 <p><code>replaySession()</code> 从标准事件 fold 出模型可见的 <code>Message[]</code>。raw delta 不重复进入历史；assembled message 才是下一请求的消息节点。compaction 只替换当前 surface，原始事件仍可审计。</p>
+<p><code>session.started.formatVersion</code> 当前为 1。缺省版本按 legacy v0 在内存升级，不改写源事件；未来版本拒绝并要求升级 harness。Session namespace 中未知事件默认 required 并 fail-closed，只有显式 <code>ignorable: true</code> 的纯信息事件可跳过。</p>
 <h3>4.1 崩溃修复</h3>
 <p>若账本存在 <code>tool.called</code> 而 runner 在 <code>tool.completed</code> 前死亡，Supervisor 追加 synthetic <code>tool.completed { outcome: "unknown" }</code> 和 <code>session.interrupted</code>。它不声称工具未执行，也不盲目重放外部副作用。</p>
 </section>
@@ -96,7 +98,7 @@ next model request</pre>
 <section>
 <h2>5. Execution Modules</h2>
 <table><thead><tr><th>模块</th><th>标准机制</th><th>不属于模块的政策</th></tr></thead><tbody>
-<tr><td>Goal</td><td><code>id / parentId / objective / owner / phase / revision</code>；父层 authority 与 CAS</td><td>强制 metric、target、金钱预算</td></tr>
+<tr><td>Goal</td><td><code>id / parentId / objective / owner / phase / revision</code>；active/paused/blocked/complete 状态机、父层 authority 与 CAS</td><td>强制 metric、target、金钱预算</td></tr>
 <tr><td>Wake</td><td>queued / leased / running / done / abnormal / merge_blocked；lease fencing；同 Agent 并发 1</td><td>任务 token/时长上限</td></tr>
 <tr><td>Schedule</td><td>到期生成 wake；触发去重与合并</td><td>行业特定节奏</td></tr>
 <tr><td>Mailbox</td><td>durable delivery；handoff 成功后才 ack</td><td>组织结构与汇报制度</td></tr>
@@ -159,7 +161,7 @@ next model request</pre>
 <p>源码保留六个 workspace 的依赖边界，但 npm 只发布一个 <code>@goah/cli</code> tarball。五个内部模块作为 bundled dependencies 随包安装，避免一个逻辑版本产生六次发布。</p>
 <table><thead><tr><th>源码模块</th><th>公共入口</th><th>职责</th></tr></thead><tbody>
 <tr><td><code>ledger-contract</code></td><td><code>@goah/cli/kernel</code> 等</td><td>kernel、Session replay、execution 和 metric 契约</td></tr>
-<tr><td><code>ledger-sqlite</code></td><td><code>@goah/cli/sqlite</code></td><td>SQLite schema v6、迁移、投影表与事务实现</td></tr>
+<tr><td><code>ledger-sqlite</code></td><td><code>@goah/cli/sqlite</code></td><td>SQLite schema v7、迁移、投影表与事务实现</td></tr>
 <tr><td><code>supervisor</code></td><td><code>@goah/cli/supervisor</code></td><td>调度、lease、进程、connector、Active Context</td></tr>
 <tr><td><code>runner-pi</code></td><td><code>@goah/cli/runner-pi</code></td><td>Pi 事件标准化、request snapshot、compaction 与进程协议</td></tr>
 <tr><td><code>testkit</code></td><td><code>@goah/cli/testkit</code></td><td>faux runner、模拟时钟、内存 SQLite、connector 和故障注入</td></tr>
@@ -181,8 +183,8 @@ next model request</pre>
 
 <section>
 <h2>11. 当前完成度与限制</h2>
-<p><span class="tag">IMPLEMENTED IN 0.3</span> stream-aware event schema、v1–v5 SQLite 迁移、标准 Pi Session events、request snapshot、compaction replacement facts、Session replay、中断 tool unknown、Active Context Markdown、Session Inspector 与默认脱敏导出、可选 metric、现有 wake/action 故障语义。</p>
-<p><span class="tag">NEXT</span> 为非 Pi runner 发布 conformance suite；为海量 delta 增加批量 checkpoint 策略；验证跨版本 Session vocabulary 的升级路径；用真实长跑账本检验 Active Context 的选择质量。</p>
+<p><span class="tag">IMPLEMENTED IN 0.4</span> stream-aware required/ignorable event schema、v1–v6 SQLite 迁移、Session format v1 与 legacy upgrader、标准 Pi Session events、request snapshot、compaction replacement facts、Session replay、中断 tool unknown、完整 Goal 生命周期、Active Context Markdown、Session Inspector 与默认脱敏导出、可选 metric、现有 wake/action 故障语义。</p>
+<p><span class="tag">NEXT</span> 为非 Pi runner 发布 conformance suite；为海量 delta 增加批量 checkpoint 策略；用真实长跑账本继续检验 Active Context 的选择质量。</p>
 <p class="note">Goah 保证状态机与证据链的机械一致性，不保证模型判断正确，也不把 prompt injection 防御伪装成账本能力。</p>
 </section>
 </main></body></html>

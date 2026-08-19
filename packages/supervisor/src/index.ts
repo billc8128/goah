@@ -15,6 +15,7 @@ import {
   type ConnectorProcessSpec,
   type ConnectorQueryResult,
   type GoalSnapshot,
+  type GoalPhase,
   type JsonValue,
   type Ledger,
   type MetricEvaluation,
@@ -77,6 +78,20 @@ export class Supervisor {
     this.#metricCollectors.set(goalId, { goalId, contract, spec, intervalMs, nextAt: 0 });
   }
   createGoal(goal: GoalSnapshot, actor = "human"): void { this.ledger.putGoal(goal, actor); }
+  updateGoal(id: string, patch: Partial<Pick<GoalSnapshot, "objective" | "owner">>, actor = "human"): GoalSnapshot {
+    if (patch.objective === undefined && patch.owner === undefined) throw new Error("goal update requires objective or owner");
+    const current = this.#goal(id);
+    const next = { ...current, ...patch, revision: current.revision + 1 };
+    this.ledger.putGoal(next, actor);
+    return next;
+  }
+  transitionGoal(id: string, phase: GoalPhase, actor = "human"): GoalSnapshot {
+    const current = this.#goal(id);
+    if (current.phase === phase) return current;
+    const next = { ...current, phase, revision: current.revision + 1 };
+    this.ledger.putGoal(next, actor);
+    return next;
+  }
 
   planWake(agent: string, at: string, reason: string, setBy = agent): WakeSnapshot | null {
     const schedule: ScheduleSnapshot = { id: `schedule:${agent}`, agent, nextWakeAt: at, reason, setBy };
@@ -309,6 +324,7 @@ export class Supervisor {
   #requiredConnector(name: string): ConnectorProcessSpec { const value = this.#connectors.get(name); if (!value) throw new Error(`connector not registered: ${name}`); return value; }
   #wake(id: string): WakeSnapshot { const value = this.ledger.wake(id); if (!value) throw new Error(`wake not found: ${id}`); return value; }
   #action(id: string): ActionSnapshot { const value = this.ledger.action(id); if (!value) throw new Error(`action not found: ${id}`); return value; }
+  #goal(id: string): GoalSnapshot { const value = this.ledger.goal(id); if (!value) throw new Error(`goal not found: ${id}`); return value; }
   #now(): string { return this.clock.now().toISOString(); }
 
   async #agentRpc(wake: WakeSnapshot, leaseToken: string, method: AgentCapability, params: JsonValue): Promise<JsonValue> {

@@ -1,4 +1,4 @@
-export const CONTRACT_VERSION = "0.3.0" as const;
+export const CONTRACT_VERSION = "0.4.0" as const;
 export const CONTRACT_STABILITY = "experimental" as const;
 
 export type JsonPrimitive = string | number | boolean | null;
@@ -11,6 +11,8 @@ export interface EventInput {
   actor: string;
   type: string;
   data: JsonValue;
+  /** An unfamiliar reader may skip this event without changing replay semantics. */
+  ignorable?: true;
 }
 
 /** One immutable fact in the global ledger and in one logical stream. */

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0
+
+- New Session streams declare format version 1 in `session.started`.
+
 ## 0.3.1
 
 - Request snapshots use an explicit behavior allowlist and exclude API keys, authorization data, signals, and transport-private objects.

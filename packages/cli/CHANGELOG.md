@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0
+
+- Added `goal-show`, `goal-update`, `goal-pause`, `goal-resume`, and `goal-complete`.
+- Session listings expose their stored format version.
+
 ## 0.3.1
 
 - Added `session list/show/replay/export`, `context show`, and stream-scoped `events` commands.

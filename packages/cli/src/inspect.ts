@@ -14,6 +14,7 @@ export interface SessionListItem {
   lastSeq: number | null;
   provider: string | null;
   model: string | null;
+  formatVersion: number | null;
   messageCount: number;
   toolCalls: number;
   compactions: number;
@@ -126,6 +127,7 @@ function summarize(ledger: SqliteLedger, wake: WakeSnapshot): SessionListItem {
     lastSeq: events.at(-1)?.seq ?? null,
     provider: typeof started?.provider === "string" ? started.provider : null,
     model: typeof started?.model === "string" ? started.model : null,
+    formatVersion: typeof started?.formatVersion === "number" ? started.formatVersion : started ? 0 : null,
     messageCount: replay.messages.length,
     toolCalls: events.filter((event) => event.type === "tool.called").length,
     compactions: events.filter((event) => event.type === "context.compacted").length,

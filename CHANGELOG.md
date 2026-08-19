@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- Added revisioned Goal show/update/pause/resume/complete commands and mechanical phase transitions.
+- Added Session format v1, an in-memory v0 upgrader, future-version refusal, and required-vs-ignorable unknown event semantics.
+- SQLite schema v7 persists the event `ignorable` marker and enforces Goal phases in SQL.
+
 ## 0.3.1
 
 - Added read-only Session list/show/replay/context/events inspection and redacted audit exports.

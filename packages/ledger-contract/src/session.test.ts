@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { interruptedSessionEvents, replaySession, type EventRecord } from "./index.js";
+import { interruptedSessionEvents, replaySession, SESSION_FORMAT_VERSION, SessionCorruptionError, SessionEventUnsupportedError, SessionFormatUnsupportedError, upgradeSessionEvents, type EventRecord } from "./index.js";
 
-function event(streamSeq: number, type: string, data: EventRecord["data"]): EventRecord {
-  return { seq: streamSeq, streamId: "wake:w", streamSeq, ts: "2030-01-01T00:00:00.000Z", actor: "worker", type, data };
+function event(streamSeq: number, type: string, data: EventRecord["data"], ignorable = false): EventRecord {
+  return { seq: streamSeq, streamId: "wake:w", streamSeq, ts: "2030-01-01T00:00:00.000Z", actor: "worker", type, data, ...(ignorable ? { ignorable: true as const } : {}) };
 }
 
 test("session replay derives messages from normalized facts and applies compaction without deleting history", () => {
@@ -34,4 +34,20 @@ test("interrupted session repair preserves an unknown tool outcome", () => {
 
 test("session replay rejects a gap in the stream", () => {
   assert.throws(() => replaySession([event(1, "session.started", {}), event(3, "session.completed", {})]), /stream gap/);
+});
+
+test("legacy format zero upgrades in memory without rewriting source events", () => {
+  const source = [event(1, "session.started", { provider: "faux", model: "m" }), event(2, "session.completed", {})];
+  const upgraded = upgradeSessionEvents(source);
+  assert.equal((source[0]!.data as Record<string, unknown>).formatVersion, undefined);
+  assert.equal((upgraded[0]!.data as Record<string, unknown>).formatVersion, SESSION_FORMAT_VERSION);
+  assert.equal(replaySession(source).status, "completed");
+});
+
+test("future formats and unknown required events fail closed while informational events may be skipped", () => {
+  assert.throws(() => replaySession([event(1, "session.started", { formatVersion: SESSION_FORMAT_VERSION + 1 })]), SessionFormatUnsupportedError);
+  const started = event(1, "session.started", { formatVersion: SESSION_FORMAT_VERSION });
+  assert.throws(() => replaySession([started, event(2, "message.future", {})]), SessionEventUnsupportedError);
+  assert.equal(replaySession([started, event(2, "message.future", {}, true), event(3, "session.completed", {})]).status, "completed");
+  assert.throws(() => replaySession([event(1, "message.user", { message: { id: "u", role: "user", content: "x" } })]), SessionCorruptionError);
 });

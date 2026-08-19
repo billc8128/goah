@@ -280,7 +280,8 @@ test("official Pi agent core worker completes a structured handoff through the p
   const supervisor = new Supervisor(ledger, runner, clock);
   supervisor.createGoal(goal()); supervisor.planWake("worker", clock.now().toISOString(), "pi integration");
   assert.equal((await supervisor.tick())?.status, "done");
-  assert.equal(ledger.events().some((event) => event.type === "session.started"), true);
+  const started = ledger.events().find((event) => event.type === "session.started");
+  assert.equal((started?.data as { formatVersion?: number }).formatVersion, 1);
   assert.equal(ledger.events().some((event) => event.type === "request.prepared"), true);
   assert.deepEqual(ledger.lastEvent("worker", "handoff.recorded")?.data, { observations: ["pi core ran"], results: ["ok"], nextSteps: [] });
   ledger.close();

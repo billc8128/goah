@@ -77,12 +77,24 @@ async function main(): Promise<void> {
     } else if (command === "events") {
       console.log(JSON.stringify(streamEvents(ledger, required("--stream"), option("--from") ? numberOption("--from") : 1), null, 2));
     } else if (command === "goal-list") console.log(JSON.stringify(ledger.goals(), null, 2));
+    else if (command === "goal-show") {
+      const goal = ledger.goal(requiredPositional(1, "goal id"));
+      if (!goal) throw new Error("goal not found");
+      console.log(JSON.stringify({ goal }, null, 2));
+    }
     else if (command === "goal-create") {
       const id = required("--id"); const owner = required("--owner"); const objective = required("--objective");
       const goal = { id, parentId: option("--parent"), objective, owner, phase: "active" as const, revision: 0 };
       supervisor.createGoal(goal, option("--actor") ?? "human");
       const wake = flag("--wake-now") ? supervisor.planWake(owner, new Date().toISOString(), `goal:${id}`, "supervisor") : null;
       console.log(JSON.stringify({ goal, wake }, null, 2));
+    } else if (command === "goal-update") {
+      const objective = option("--objective"); const owner = option("--owner");
+      const goal = supervisor.updateGoal(requiredPositional(1, "goal id"), { ...(objective ? { objective } : {}), ...(owner ? { owner } : {}) }, option("--actor") ?? "human");
+      console.log(JSON.stringify({ goal }, null, 2));
+    } else if (["goal-pause", "goal-resume", "goal-complete"].includes(command)) {
+      const phase = command === "goal-pause" ? "paused" : command === "goal-resume" ? "active" : "complete";
+      console.log(JSON.stringify({ goal: supervisor.transitionGoal(requiredPositional(1, "goal id"), phase, option("--actor") ?? "human") }, null, 2));
     } else if (command === "action-list") console.log(JSON.stringify(ledger.actions(), null, 2));
     else if (command === "approve") console.log(JSON.stringify(await supervisor.approveAction(requiredPositional(1, "action id"), option("--actor") ?? "human", required("--reason"), evidence()), null, 2));
     else if (command === "reject") console.log(JSON.stringify(supervisor.rejectAction(requiredPositional(1, "action id"), option("--actor") ?? "human", required("--reason"), evidence()), null, 2));
@@ -102,6 +114,9 @@ function printHelp(): void {
   console.log(`goah init [--provider anthropic|openai|ark-coding|faux] [--model ID]
 goah doctor
 goah goal-create --id ID --owner AGENT --objective TEXT [--wake-now]
+goah goal-show ID | goal-list
+goah goal-update ID [--objective TEXT] [--owner AGENT] [--actor ACTOR]
+goah goal-pause|goal-resume|goal-complete ID [--actor ACTOR]
 goah wake AGENT [--reason TEXT]
 goah run-once
 goah session list
@@ -132,4 +147,4 @@ function providerOption(value: string): PiProvider {
   if (!["anthropic", "openai", "ark-coding", "faux"].includes(value)) throw new Error(`unsupported provider: ${value}`);
   return value as PiProvider;
 }
-function mutates(command: string): boolean { return ["start", "run-once", "wake", "goal-create", "approve", "reject"].includes(command); }
+function mutates(command: string): boolean { return ["start", "run-once", "wake", "goal-create", "goal-update", "goal-pause", "goal-resume", "goal-complete", "approve", "reject"].includes(command); }

@@ -3,6 +3,7 @@ import {
   assertActionRequest,
   assertActionTransition,
   assertGoalSnapshot,
+  assertGoalTransition,
   type ActionSnapshot,
   type ActionStatus,
   type AuditAdvice,
@@ -27,14 +28,14 @@ type FaultInjector = (point: FaultPoint) => void;
 type Row = Record<string, unknown>;
 type ProjectionName = "goals" | "schedule" | "wakes" | "mailbox" | "actions";
 
-export const SQLITE_SCHEMA_VERSION = 6;
+export const SQLITE_SCHEMA_VERSION = 7;
 
 const createGoals = `CREATE TABLE IF NOT EXISTS goals (
   id TEXT PRIMARY KEY,
   parent_id TEXT REFERENCES goals(id),
   objective TEXT NOT NULL,
   owner TEXT NOT NULL,
-  phase TEXT NOT NULL,
+  phase TEXT NOT NULL CHECK(phase IN ('active','paused','blocked','complete')),
   revision INTEGER NOT NULL CHECK(revision >= 0)
 ) STRICT;`;
 
@@ -105,6 +106,14 @@ WHEN OLD.status <> NEW.status AND NOT (
   (OLD.status = 'unknown' AND NEW.status IN ('dispatching','confirmed','failed'))
 )
 BEGIN SELECT RAISE(ABORT, 'invalid action transition'); END;
+
+CREATE TRIGGER IF NOT EXISTS goals_valid_transition BEFORE UPDATE OF phase ON goals
+WHEN OLD.phase <> NEW.phase AND NOT (
+  (OLD.phase = 'active' AND NEW.phase IN ('paused','blocked','complete')) OR
+  (OLD.phase = 'paused' AND NEW.phase IN ('active','complete')) OR
+  (OLD.phase = 'blocked' AND NEW.phase IN ('active','complete'))
+)
+BEGIN SELECT RAISE(ABORT, 'invalid goal transition'); END;
 `;
 
 const schema = `
@@ -116,6 +125,7 @@ CREATE TABLE IF NOT EXISTS events (
   actor TEXT NOT NULL,
   type TEXT NOT NULL,
   data TEXT NOT NULL CHECK(json_valid(data)),
+  ignorable INTEGER CHECK(ignorable IS NULL OR ignorable = 1),
   UNIQUE(stream_id, stream_seq)
 ) STRICT;
 ${createGoals}
@@ -184,6 +194,7 @@ export class SqliteLedger implements Ledger {
     if (current) {
       if (goal.revision !== current.revision + 1) throw new Error("goal revision CAS failed");
       if (goal.parentId !== current.parentId) throw new Error("goal reparenting is not supported");
+      assertGoalTransition(current.phase, goal.phase);
       this.#assertGoalAuthority(current.parentId, actor);
     } else {
       if (goal.revision !== 0) throw new Error("new goal revision must be 0");
@@ -454,8 +465,8 @@ export class SqliteLedger implements Ledger {
     if (!input.streamId.trim() || !input.actor.trim() || !input.type.trim()) throw new Error("event streamId, actor and type are required");
     const streamSeq = Number((this.db.prepare("SELECT COALESCE(MAX(stream_seq),0)+1 AS next FROM events WHERE stream_id=?").get(input.streamId) as { next: number }).next);
     const result = expectedSeq === undefined
-      ? this.db.prepare("INSERT INTO events(stream_id,stream_seq,ts,actor,type,data) VALUES (?,?,?,?,?,json(?))").run(input.streamId, streamSeq, input.ts, input.actor, input.type, JSON.stringify(input.data))
-      : this.db.prepare("INSERT INTO events(seq,stream_id,stream_seq,ts,actor,type,data) VALUES (?,?,?,?,?,?,json(?))").run(expectedSeq, input.streamId, streamSeq, input.ts, input.actor, input.type, JSON.stringify(input.data));
+      ? this.db.prepare("INSERT INTO events(stream_id,stream_seq,ts,actor,type,data,ignorable) VALUES (?,?,?,?,?,json(?),?)").run(input.streamId, streamSeq, input.ts, input.actor, input.type, JSON.stringify(input.data), input.ignorable === true ? 1 : null)
+      : this.db.prepare("INSERT INTO events(seq,stream_id,stream_seq,ts,actor,type,data,ignorable) VALUES (?,?,?,?,?,?,json(?),?)").run(expectedSeq, input.streamId, streamSeq, input.ts, input.actor, input.type, JSON.stringify(input.data), input.ignorable === true ? 1 : null);
     return { ...input, seq: Number(result.lastInsertRowid), streamSeq };
   }
 
@@ -496,7 +507,7 @@ export class SqliteLedger implements Ledger {
     this.#transaction(() => {
       this.db.exec(`PRAGMA defer_foreign_keys=ON;
         DROP TRIGGER IF EXISTS events_no_update; DROP TRIGGER IF EXISTS events_no_delete; DROP TRIGGER IF EXISTS events_fts_insert;
-        DROP TRIGGER IF EXISTS wakes_valid_transition; DROP TRIGGER IF EXISTS actions_valid_transition;
+        DROP TRIGGER IF EXISTS wakes_valid_transition; DROP TRIGGER IF EXISTS actions_valid_transition; DROP TRIGGER IF EXISTS goals_valid_transition;
         DROP INDEX IF EXISTS events_agent_kind_seq; DROP INDEX IF EXISTS events_wake_seq; DROP INDEX IF EXISTS events_coalesced_trigger;
         DROP INDEX IF EXISTS events_actor_type_seq; DROP INDEX IF EXISTS events_stream_seq;
         DROP INDEX IF EXISTS wakes_one_active_agent; DROP INDEX IF EXISTS wakes_queue_order; DROP INDEX IF EXISTS schedule_due; DROP INDEX IF EXISTS actions_agent_status;
@@ -532,13 +543,16 @@ export class SqliteLedger implements Ledger {
             actor TEXT NOT NULL,
             type TEXT NOT NULL,
             data TEXT NOT NULL CHECK(json_valid(data)),
+            ignorable INTEGER CHECK(ignorable IS NULL OR ignorable = 1),
             UNIQUE(stream_id, stream_seq)
           ) STRICT;
-          INSERT INTO events(seq,stream_id,stream_seq,ts,actor,type,data)
-          SELECT seq,stream_id,ROW_NUMBER() OVER (PARTITION BY stream_id ORDER BY seq),ts,agent,kind,data FROM (
+          INSERT INTO events(seq,stream_id,stream_seq,ts,actor,type,data,ignorable)
+          SELECT seq,stream_id,ROW_NUMBER() OVER (PARTITION BY stream_id ORDER BY seq),ts,agent,kind,data,NULL FROM (
             SELECT seq,ts,agent,kind,data,CASE WHEN wake_id IS NULL THEN 'control:'||agent ELSE 'wake:'||wake_id END AS stream_id FROM events_legacy
           );
           DROP TABLE events_legacy;`);
+      } else if (!eventColumns.has("ignorable")) {
+        this.db.exec("ALTER TABLE events ADD COLUMN ignorable INTEGER CHECK(ignorable IS NULL OR ignorable = 1)");
       }
       this.db.exec(`${indexesAndTriggers} INSERT INTO events_fts(events_fts) VALUES('rebuild'); PRAGMA user_version=${SQLITE_SCHEMA_VERSION};`);
     });
@@ -552,8 +566,8 @@ export class SqliteLedger implements Ledger {
   #now(): string { return this.#clock.now().toISOString(); }
 }
 
-function mapEvent(r: Row): EventRecord { return { seq: Number(r.seq), streamId: String(r.stream_id), streamSeq: Number(r.stream_seq), ts: String(r.ts), actor: String(r.actor), type: String(r.type), data: JSON.parse(String(r.data)) as JsonValue }; }
-function mapGoal(r: Row): GoalSnapshot { return { id: String(r.id), parentId: r.parent_id === null ? null : String(r.parent_id), objective: String(r.objective), owner: String(r.owner), phase: String(r.phase), revision: Number(r.revision) }; }
+function mapEvent(r: Row): EventRecord { return { seq: Number(r.seq), streamId: String(r.stream_id), streamSeq: Number(r.stream_seq), ts: String(r.ts), actor: String(r.actor), type: String(r.type), data: JSON.parse(String(r.data)) as JsonValue, ...(Number(r.ignorable) === 1 ? { ignorable: true as const } : {}) }; }
+function mapGoal(r: Row): GoalSnapshot { return { id: String(r.id), parentId: r.parent_id === null ? null : String(r.parent_id), objective: String(r.objective), owner: String(r.owner), phase: String(r.phase) as GoalSnapshot["phase"], revision: Number(r.revision) }; }
 function mapSchedule(r: Row): ScheduleSnapshot { return {id:String(r.id),agent:String(r.agent),nextWakeAt:String(r.next_wake_at),reason:String(r.reason),setBy:String(r.set_by)}; }
 function mapWake(r: Row): WakeSnapshot { return {id:String(r.id),agent:String(r.agent),triggerRef:String(r.trigger_ref),status:String(r.status) as WakeSnapshot["status"],leaseUntil:r.lease_until===null?null:String(r.lease_until),attempt:Number(r.attempt),startedAt:r.started_at===null?null:String(r.started_at),endedAt:r.ended_at===null?null:String(r.ended_at),enqueuedSeq:Number(r.enqueued_seq),leaseToken:r.lease_token===null?null:String(r.lease_token),runnerPid:r.runner_pid===null?null:Number(r.runner_pid)}; }
 function mapMail(r: Row): MailSnapshot { return {id:String(r.id),to:String(r.to_agent),from:String(r.from_agent),level:String(r.level) as MailSnapshot["level"],body:JSON.parse(String(r.body)),readAt:r.read_at===null?null:String(r.read_at)}; }

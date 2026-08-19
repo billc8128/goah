@@ -42,6 +42,11 @@ const sessions = JSON.parse(run("session", "list"));
 const detail = JSON.parse(run("session", "show", wake.id));
 const exported = join(app, "session.json");
 run("session", "export", wake.id, "--output", exported);
-if (sessions[0]?.wakeId !== wake.id || detail.eventTypes?.["request.prepared"] !== 1 || JSON.parse(readFileSync(exported, "utf8")).redacted !== true) throw new Error("packed CLI session inspector failed");
+if (sessions[0]?.wakeId !== wake.id || sessions[0]?.formatVersion !== 1 || detail.eventTypes?.["request.prepared"] !== 1 || JSON.parse(readFileSync(exported, "utf8")).redacted !== true) throw new Error("packed CLI session inspector failed");
+run("goal-show", "pack-smoke");
+run("goal-pause", "pack-smoke");
+run("goal-resume", "pack-smoke");
+const completedGoal = JSON.parse(run("goal-complete", "pack-smoke")).goal;
+if (completedGoal.phase !== "complete" || completedGoal.revision !== 3) throw new Error("packed CLI goal lifecycle failed");
 
 process.stdout.write(`${JSON.stringify({ ok: true, app, packages: 1, bundledModules: packed[0].bundled.length, wake: wake.id }, null, 2)}\n`);

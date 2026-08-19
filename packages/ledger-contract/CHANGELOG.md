@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0
+
+- Added the closed Goal phase lifecycle and transition assertion.
+- Added Session format v1, legacy upgrade, corruption/unsupported errors, and the event `ignorable` marker.
+
 ## 0.3.0
 
 - Replaced the wake-specific event envelope with generic `streamId` / `streamSeq` events.

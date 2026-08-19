@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0
+
+- Schema v7 persists `EventRecord.ignorable` and adds SQL Goal phase checks/transitions.
+- Migrates schema v6 without rewriting event identity or payload history.
+
 ## 0.3.0
 
 - Added SQLite schema v6 with global and per-stream event order.

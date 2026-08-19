@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0
+
+- Added revisioned Goal update and lifecycle transition APIs.
+
 ## 0.3.0
 
 - Added deterministic Markdown Active Context composition with evidence source sequences.

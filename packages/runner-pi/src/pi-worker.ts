@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { Agent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage, fauxToolCall, Type, type Message } from "@earendil-works/pi-ai";
-import type { AgentCapability, JsonValue, RunnerResult, SessionMessage, WakeOutput } from "goah-ledger-contract";
+import { SESSION_FORMAT_VERSION, type AgentCapability, type JsonValue, type RunnerResult, type SessionMessage, type WakeOutput } from "goah-ledger-contract";
 import { runProcessWorker, type WorkerRpc } from "./index.js";
 import { createPiModel, providerApiKey } from "./model-provider.js";
 
@@ -51,7 +51,7 @@ export async function runPiWorker(): Promise<void> {
     const root = resolve(process.cwd());
     const tools = createTools(root, (value) => { output = value; }, process.env.GOAH_PI_ALLOW_BASH === "true", rpc, request.wake.startedAt);
     const contextPolicy = resolveContextPolicy(model.contextWindow, process.env);
-    emit({ type: "session.started", data: { provider, model: modelId, runner: "pi", contextWindowTokens: model.contextWindow, maxOutputTokensPerTurn: model.maxTokens } });
+    emit({ type: "session.started", data: { formatVersion: SESSION_FORMAT_VERSION, provider, model: modelId, runner: "pi", contextWindowTokens: model.contextWindow, maxOutputTokensPerTurn: model.maxTokens } });
     const contextRecord = typeof request.context === "object" && request.context !== null && !Array.isArray(request.context) ? request.context : {};
     const suppliedPrompt = typeof contextRecord.systemPrompt === "string" ? contextRecord.systemPrompt : undefined;
     const activeContext = typeof contextRecord.text === "string" ? contextRecord.text : JSON.stringify(request.context);

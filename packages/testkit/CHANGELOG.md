@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0
+
+- Added Goal lifecycle, schema v6→v7, Session upgrader, and unknown-event conformance coverage.
+
 ## 0.3.0
 
 - Updated faux runners and conformance coverage for stream events, Active Context, and replayable sessions.

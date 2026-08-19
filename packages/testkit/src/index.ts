@@ -92,6 +92,12 @@ export function assertLedgerConformance(create: LedgerConformanceFactory): void 
   const clock = new SimulatedClock("2030-01-01T00:00:00.000Z");
   const ledger = create(clock);
   ledger.putGoal({ id: "root", parentId: null, objective: "test", owner: "a", phase: "active", revision: 0 }, "human");
+  ledger.putGoal({ id: "root", parentId: null, objective: "test", owner: "a", phase: "paused", revision: 1 }, "human");
+  ledger.putGoal({ id: "root", parentId: null, objective: "test", owner: "a", phase: "active", revision: 2 }, "human");
+  ledger.putGoal({ id: "root", parentId: null, objective: "test", owner: "a", phase: "complete", revision: 3 }, "human");
+  let reopened = false;
+  try { ledger.putGoal({ id: "root", parentId: null, objective: "test", owner: "a", phase: "active", revision: 4 }, "human"); } catch { reopened = true; }
+  if (!reopened) throw new Error("ledger conformance: completed goal was reopened");
   const first = ledger.enqueueWake({ id: "z", agent: "a", triggerRef: "first", status: "queued", leaseUntil: null, attempt: 0, startedAt: null, endedAt: null, enqueuedSeq: 0, leaseToken: null, runnerPid: null }, "supervisor");
   ledger.enqueueWake({ id: "a", agent: "b", triggerRef: "second", status: "queued", leaseUntil: null, attempt: 0, startedAt: null, endedAt: null, enqueuedSeq: 0, leaseToken: null, runnerPid: null }, "supervisor");
   const claimed = ledger.claimNextWake(clock.now().toISOString(), "2030-01-01T00:01:00.000Z", "lease");
@@ -102,6 +108,8 @@ export function assertLedgerConformance(create: LedgerConformanceFactory): void 
     ledger.requestAction({ id: "bad", agent: "a", kind: "mock", connector: "mock", payload: {}, reason: "bad", evidence: [999_999], gated: false, status: "requested", reconciledAt: null, externalRef: null, auditAdvice: null, adviceAcked: false }, "a");
   } catch { rejected = true; }
   if (!rejected) throw new Error("ledger conformance: nonexistent evidence was accepted");
+  const informational = ledger.appendEvent({ streamId: "conformance:events", ts: clock.now().toISOString(), actor: "a", type: "session.conformance_info", data: {}, ignorable: true });
+  if (ledger.readStream(informational.streamId)[0]?.ignorable !== true) throw new Error("ledger conformance: ignorable event marker was not preserved");
   const before = JSON.stringify({ goals: ledger.goals(), wakes: ledger.wakes() });
   ledger.rebuildProjections();
   if (JSON.stringify({ goals: ledger.goals(), wakes: ledger.wakes() }) !== before) throw new Error("ledger conformance: projection replay changed state");

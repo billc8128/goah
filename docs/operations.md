@@ -13,6 +13,8 @@ npm run soak:real
 
 For a general installation, run `goah init --provider <provider> --model <id>`, then use `goah doctor`. The first bounded path is `goal-create --wake-now` followed by `run-once` and `status`; use `goah start` only after that succeeds. Secret values use `env:NAME` references and are resolved only when the process spec is created. The runner executes locally under the directory containing `goah.config.json`; Git behavior belongs in the selected coding skill. Control state defaults to `~/.goah/state/<project-hash>` and can be relocated with `GOAH_STATE_HOME`. Human controls include manual `wake`, goal creation, action approval/rejection, and dashboard generation.
 
+Goal operators can inspect and revise lifecycle state with `goal-show`, `goal-update`, `goal-pause`, `goal-resume`, and `goal-complete`. Every mutation applies parent authority and increments revision; `complete` is terminal. A worker handoff never completes its own Goal automatically.
+
 Runner RPC is bidirectional but fenced by the active wake lease. Default child capabilities cover ledger search, mail, scheduling, actions, and advice acknowledgement. Only CEO profiles can write child goals; verifier/audit profiles can write audit advice.
 
 Session inspection is read-only and does not resolve provider or connector secrets. Use `goah session list`, `session show`, `session replay`, `context show`, and `events --stream` to inspect the exact wake stream. `session export` writes a redacted `goah.session-export.v1` bundle by default; use `--raw` only when the destination is trusted because raw model requests and tool results may contain sensitive data.

@@ -21,6 +21,11 @@ function repository(): string {
 function invoke(directory: string, ...args: string[]): string {
   return execFileSync(process.execPath, [cli, ...args], { cwd: directory, encoding: "utf8", env: { ...process.env, GOAH_STATE_HOME: join(tmpdir(), "goah-cli-test-state") } });
 }
+function invokeFailure(directory: string, ...args: string[]): string {
+  const result = spawnSync(process.execPath, [cli, ...args], { cwd: directory, encoding: "utf8", env: { ...process.env, GOAH_STATE_HOME: join(tmpdir(), "goah-cli-test-state") } });
+  assert.notEqual(result.status, 0);
+  return result.stderr;
+}
 
 test("CLI initializes versioned config, resolves secret references, and enforces singleton lock", () => {
   const directory = repository();
@@ -63,6 +68,7 @@ test("CLI runs the install-to-first-handoff path with the faux provider", () => 
   const sessions = JSON.parse(invoke(directory, "session", "list"));
   assert.equal(sessions[0].wakeId, wakeId);
   assert.equal(sessions[0].sessionStatus, "completed");
+  assert.equal(sessions[0].formatVersion, 1);
   const detail = JSON.parse(invoke(directory, "session", "show", "--config", "goah.config.json", wakeId));
   assert.equal(detail.eventTypes["request.prepared"], 1);
   assert.ok(detail.replay.messageCount > 0);
@@ -108,6 +114,23 @@ test("session export redaction preserves structure while removing common secrets
   assert.equal(redacted.token, "[REDACTED]");
   assert.doesNotMatch(redacted.nested.text, /abcdef|abcdefghijklmnop/);
   if (process.env.HOME) assert.doesNotMatch(redacted.nested.text, new RegExp(process.env.HOME.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+});
+
+test("CLI exposes the complete goal lifecycle with revisioned transitions", () => {
+  const directory = repository();
+  invoke(directory, "init", "--provider", "faux", "--agent", "worker");
+  invoke(directory, "goal-create", "--id", "lifecycle", "--owner", "worker", "--objective", "Initial objective");
+  assert.equal(JSON.parse(invoke(directory, "goal-show", "lifecycle")).goal.revision, 0);
+  const updated = JSON.parse(invoke(directory, "goal-update", "lifecycle", "--objective", "Updated objective"));
+  assert.equal(updated.goal.objective, "Updated objective");
+  assert.equal(updated.goal.revision, 1);
+  assert.equal(JSON.parse(invoke(directory, "goal-pause", "lifecycle")).goal.phase, "paused");
+  assert.equal(JSON.parse(invoke(directory, "goal-resume", "lifecycle")).goal.phase, "active");
+  const completed = JSON.parse(invoke(directory, "goal-complete", "lifecycle"));
+  assert.equal(completed.goal.phase, "complete");
+  assert.equal(completed.goal.revision, 4);
+  assert.match(invokeFailure(directory, "goal-resume", "lifecycle"), /invalid goal transition/);
+  assert.match(invokeFailure(directory, "goal-update", "lifecycle"), /requires objective or owner/);
 });
 
 test("CLI runs a local operations goal without Git", () => {

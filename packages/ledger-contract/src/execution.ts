@@ -1,9 +1,10 @@
-import type { EventInput, EventRecord, EventStore, JsonValue } from "./kernel.js";
+import { CONTRACT_VERSION, type EventInput, type EventRecord, type EventStore, type JsonValue } from "./kernel.js";
 import type { MetricSample } from "./metrics.js";
 
 export type WakeStatus = "queued" | "leased" | "running" | "done" | "abnormal" | "merge_blocked";
 export type ActionStatus = "requested" | "approved" | "dispatching" | "confirmed" | "failed" | "unknown";
-export interface GoalSnapshot { id: string; parentId: string | null; objective: string; owner: string; phase: string; revision: number }
+export type GoalPhase = "active" | "paused" | "blocked" | "complete";
+export interface GoalSnapshot { id: string; parentId: string | null; objective: string; owner: string; phase: GoalPhase; revision: number }
 export interface ScheduleSnapshot { id: string; agent: string; nextWakeAt: string; reason: string; setBy: string }
 export interface WakeSnapshot { id: string; agent: string; triggerRef: string; status: WakeStatus; leaseUntil: string | null; attempt: number; startedAt: string | null; endedAt: string | null; enqueuedSeq: number; leaseToken: string | null; runnerPid: number | null }
 export type MailLevel = "fyi" | "decision" | "emergency";
@@ -24,7 +25,7 @@ export interface RunnerHandle { pid: number | null; begin(): void; result: Promi
 export interface Runner { readonly isolation: "process"; prepare(request: RunRequest): RunnerHandle; terminateProcess(pid: number): Promise<void> }
 
 export interface ConnectorCapability { kind: string; nativeIdempotency: boolean; query: "by_idempotency_key" | "by_external_ref" | "none"; automaticRetry: boolean; risk: "reversible" | "gated" | "irreversible" }
-export interface ConnectorManifest { contractVersion: "0.3.0"; connector: string; dryRun: boolean; capabilities: ConnectorCapability[] }
+export interface ConnectorManifest { contractVersion: typeof CONTRACT_VERSION; connector: string; dryRun: boolean; capabilities: ConnectorCapability[] }
 export interface ConnectorDispatchResult { status: "confirmed" | "failed"; externalRef?: string }
 export interface ConnectorQueryResult { status: "confirmed" | "failed" | "pending"; externalRef?: string }
 export interface ConnectorProcessSpec { manifest: ConnectorManifest; command: string; args: string[]; env?: Record<string, string>; timeoutMs?: number }
@@ -77,9 +78,11 @@ export interface Ledger extends EventStore {
 
 const wakeTransitions: Record<WakeStatus, readonly WakeStatus[]> = { queued: ["leased", "abnormal"], leased: ["queued", "running", "abnormal"], running: ["done", "abnormal", "merge_blocked"], done: [], abnormal: [], merge_blocked: [] };
 const actionTransitions: Record<ActionStatus, readonly ActionStatus[]> = { requested: ["approved", "failed"], approved: ["dispatching", "failed"], dispatching: ["confirmed", "failed", "unknown"], unknown: ["dispatching", "confirmed", "failed"], confirmed: [], failed: [] };
+const goalTransitions: Record<GoalPhase, readonly GoalPhase[]> = { active: ["paused", "blocked", "complete"], paused: ["active", "complete"], blocked: ["active", "complete"], complete: [] };
 export function assertWakeTransition(from: WakeStatus, to: WakeStatus): void { if (!wakeTransitions[from].includes(to)) throw new Error(`invalid wake transition: ${from} -> ${to}`); }
 export function assertActionTransition(from: ActionStatus, to: ActionStatus): void { if (!actionTransitions[from].includes(to)) throw new Error(`invalid action transition: ${from} -> ${to}`); }
+export function assertGoalTransition(from: GoalPhase, to: GoalPhase): void { if (from !== to && !goalTransitions[from].includes(to)) throw new Error(`invalid goal transition: ${from} -> ${to}`); }
 export function assertHandoff(value: Handoff): void { if (!Array.isArray(value.observations) || !Array.isArray(value.results) || !Array.isArray(value.nextSteps)) throw new Error("invalid handoff: observations, results and nextSteps are required arrays"); }
 export function assertActionRequest(value: ActionSnapshot): void { if (!value.reason.trim()) throw new Error("action reason is required"); if (value.evidence.length === 0) throw new Error("action evidence is required"); if (value.status !== "requested") throw new Error("new action must be requested"); if (!value.connector.trim()) throw new Error("action connector is required"); if (value.reconciledAt !== null) throw new Error("requested action cannot be reconciled"); }
-export function assertGoalSnapshot(value: GoalSnapshot): void { if (!value.objective.trim() || !value.owner.trim()) throw new Error("goal objective and owner are required"); }
+export function assertGoalSnapshot(value: GoalSnapshot): void { if (!value.objective.trim() || !value.owner.trim()) throw new Error("goal objective and owner are required"); if (!["active", "paused", "blocked", "complete"].includes(value.phase)) throw new Error(`invalid goal phase: ${value.phase}`); }
 export function capabilityFor(manifest: ConnectorManifest, kind: string): ConnectorCapability | null { return manifest.capabilities.find((capability) => capability.kind === kind) ?? null; }

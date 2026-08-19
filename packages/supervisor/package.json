@@ -1,7 +1,7 @@
 {
   "name": "goah-supervisor",
   "private": true,
-  "version": "0.3.1",
+  "version": "0.4.0",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -21,6 +21,6 @@
   "types": "./dist/index.d.ts",
   "exports": "./dist/index.js",
   "dependencies": {
-    "goah-ledger-contract": "0.3.1"
+    "goah-ledger-contract": "0.4.0"
   }
 }
