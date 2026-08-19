@@ -4,14 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
-import { CONTRACT_VERSION, type Clock, type GoalSnapshot, type WakeSnapshot } from "goah-ledger-contract";
+import { CONTRACT_VERSION, controlStream, wakeStream, type Clock, type EventInput, type GoalSnapshot, type JsonValue, type WakeSnapshot } from "goah-ledger-contract";
 import { piWorkerPath, ProcessRunner, verificationWorkerPath } from "goah-runner-pi";
 import { calibrateVerificationThreshold, evaluateVerification, ProcessVerifierModel, renderDashboard, runSupervisorDaemon, Supervisor, VerificationPlane, type VerifierModel } from "goah-supervisor";
 import { assertLedgerConformance, createMemoryLedger, fauxRunnerWorkerPath, MockConnector, SimulatedClock } from "./index.js";
 
 const metric = { source: "test", window: "1h", direction: "at_least" as const, target: 1, freshnessMs: 60_000, onMissing: "abnormal" as const, onStale: "wake_owner" as const };
 function queuedWake(id: string, agent = "worker", triggerRef = `trigger:${id}`): WakeSnapshot { return { id, agent, triggerRef, status: "queued", leaseUntil: null, attempt: 0, startedAt: null, endedAt: null, enqueuedSeq: 0, leaseToken: null, runnerPid: null }; }
-function goal(): GoalSnapshot { return { id: "root", parentId: null, objective: "produce a checked artifact", metric, target: 1, owner: "worker", phase: "active", revision: 0 }; }
+function goal(): GoalSnapshot { return { id: "root", parentId: null, objective: "produce a checked artifact", owner: "worker", phase: "active", revision: 0 }; }
+function event(actor: string, type: string, data: JsonValue = {}, wakeId?: string): EventInput { return { streamId: wakeId ? wakeStream(wakeId) : controlStream(actor), ts: "2026-08-18T00:00:00.000Z", actor, type, data }; }
 function repository(): string {
   const path = mkdtempSync(join(tmpdir(), "goah-runner-root-"));
   git(path, ["init", "-b", "main"]); git(path, ["config", "user.email", "goah@example.test"]); git(path, ["config", "user.name", "GOAH Test"]);
@@ -29,7 +30,7 @@ test("vertical slice commits handoff while the runner owns local files", async (
   const ledger = createMemoryLedger({ clock });
   const contextFile = join(mkdtempSync(join(tmpdir(), "goah-context-")), "context.json");
   const runner = fauxRunner([
-    { write: { path: "artifact.txt", content: "verified\n" }, trace: [{ kind: "tool", data: { name: "write_artifact" } }] },
+    { write: { path: "artifact.txt", content: "verified\n" }, trace: [{ type: "tool.completed", data: { callId: "write", result: { name: "write_artifact" } } }] },
     { handoff: { handoff: { observations: ["runner root clean"], results: ["local file written"], nextSteps: ["check later"] }, mail: [], nextWakeAt: "2026-08-19T00:00:00.000Z" } },
   ], contextFile, repo);
   const supervisor = new Supervisor(ledger, runner, clock);
@@ -39,9 +40,9 @@ test("vertical slice commits handoff while the runner owns local files", async (
   const completed = await supervisor.tick();
   assert.equal(completed?.status, "done");
   assert.equal(readFileSync(join(repo, "artifact.txt"), "utf8"), "verified\n");
-  assert.equal((JSON.parse(readFileSync(contextFile, "utf8")) as { mail: unknown[] }).mail.length, 1);
+  assert.match((JSON.parse(readFileSync(contextFile, "utf8")) as { text: string }).text, /# Incoming/);
   assert.equal(ledger.unreadMail("worker").length, 0);
-  assert.equal(ledger.events().some((event) => event.kind.startsWith("workspace.")), false);
+  assert.equal(ledger.events().some((event) => event.type.startsWith("workspace.")), false);
   ledger.close();
 });
 
@@ -64,11 +65,11 @@ test("crashed wake keeps emergency mail and local partial work for recovery", as
   ledger.enqueueWake(queuedWake("recovery", "worker", `recovery:${abnormal!.id}`), "supervisor");
   const second = new Supervisor(ledger, recovering, clock);
   assert.equal((await second.tick())?.status, "done");
-  const context = JSON.parse(readFileSync(recoveryContext, "utf8")) as { mail: unknown[]; recoveryEvents: unknown[] };
-  assert.equal(context.mail.length, 1);
-  assert.ok(context.recoveryEvents.length > 0);
+  const context = JSON.parse(readFileSync(recoveryContext, "utf8")) as { text: string };
+  assert.match(context.text, /# Incoming/);
+  assert.match(context.text, /# Recovery/);
   assert.equal(ledger.unreadMail("worker").length, 0);
-  assert.equal(ledger.events().some((event) => event.kind.startsWith("workspace.")), false);
+  assert.equal(ledger.events().some((event) => event.type.startsWith("workspace.")), false);
   ledger.close();
 });
 
@@ -119,7 +120,7 @@ test("gated action can be approved, connector crash becomes unknown, and audit a
   const contextFile = join(mkdtempSync(join(tmpdir(), "goah-context-")), "context.json");
   const supervisor = new Supervisor(ledger, fauxRunner([{ handoff: { handoff: { observations: [], results: [], nextSteps: [] }, mail: [], nextWakeAt: null } }], contextFile), clock);
   supervisor.registerConnector(connector.spec);
-  const evidence = ledger.appendEvent({ ts: clock.now().toISOString(), agent: "worker", kind: "observed", data: {}, wakeId: null });
+  const evidence = ledger.appendEvent({ ...event("worker", "observed"), ts: clock.now().toISOString() });
   const requested = await supervisor.submitAction({ id: "a1", agent: "worker", kind: "mock.write", payload: {}, reason: "evidence", evidence: [evidence.seq], auditAdvice: null, adviceAcked: false }, "external");
   assert.equal(requested.status, "requested");
   await assert.rejects(() => supervisor.approveAction("a1", "human", "approved", [evidence.seq]), /injected connector crash/);
@@ -130,7 +131,7 @@ test("gated action can be approved, connector crash becomes unknown, and audit a
   supervisor.putAuditAdvice("a1", { by: "verifier", body: { issue: "review" }, evidence: [evidence.seq] });
   supervisor.createGoal(goal()); supervisor.planWake("worker", clock.now().toISOString(), "audit");
   await supervisor.tick();
-  assert.equal((JSON.parse(readFileSync(contextFile, "utf8")) as { auditAdvice: unknown[] }).auditAdvice.length, 1);
+  assert.match((JSON.parse(readFileSync(contextFile, "utf8")) as { text: string }).text, /Audit advice for a1/);
   supervisor.ackAuditAdvice("a1", "worker");
   assert.equal(ledger.unackedAuditAdvice("worker").length, 0);
   ledger.close();
@@ -147,7 +148,7 @@ test("connector subprocess does not inherit ambient supervisor secrets", async (
       command: process.execPath,
       args: ["-e", "process.stdin.resume(); process.stdin.on('end',()=>process.stdout.write(JSON.stringify({status:process.env.GOAH_AMBIENT_SECRET_TEST?'failed':'confirmed'})))"],
     });
-    const evidence = ledger.appendEvent({ ts: clock.now().toISOString(), agent: "worker", kind: "observed", data: {}, wakeId: null });
+    const evidence = ledger.appendEvent({ ...event("worker", "observed"), ts: clock.now().toISOString() });
     const result = await supervisor.submitAction({ id: "env", agent: "worker", kind: "check.env", payload: {}, reason: "verify isolation", evidence: [evidence.seq], auditAdvice: null, adviceAcked: false }, "isolated");
     assert.equal(result.status, "confirmed");
     ledger.close();
@@ -163,6 +164,7 @@ test("schedule, mail, metric, and heartbeat triggers are durable and coalesced",
     heartbeatPolicies: [{ agent: "silent", maxSilentMs: 100, escalateTo: "ceo", since: new Date(clock.now().getTime() - 1_000).toISOString() }],
   });
   supervisor.createGoal(goal());
+  supervisor.registerMetricContract("root", metric);
   ledger.putMail({ id: "decision", to: "worker", from: "human", level: "decision", body: {}, readAt: null }, "human");
   supervisor.planWake("worker", clock.now().toISOString(), "scheduled");
   const evaluation = supervisor.recordMetric({ goalId: "root", source: "test", observedAt: clock.now().toISOString(), value: 0 });
@@ -170,8 +172,8 @@ test("schedule, mail, metric, and heartbeat triggers are durable and coalesced",
   await supervisor.tick();
   assert.equal(ledger.wakes().filter((wake) => wake.agent === "worker").length, 1);
   assert.equal(ledger.wakes().some((wake) => wake.agent === "ceo" && wake.status === "queued"), true);
-  assert.equal(ledger.events().some((event) => event.kind === "wake.trigger_coalesced"), true);
-  assert.equal(ledger.events().some((event) => event.kind === "watchdog.heartbeat_violation"), true);
+  assert.equal(ledger.events().some((event) => event.type === "wake.trigger_coalesced"), true);
+  assert.equal(ledger.events().some((event) => event.type === "watchdog.heartbeat_violation"), true);
   ledger.close();
 });
 
@@ -185,7 +187,7 @@ test("supervisor renews a live runner lease instead of treating duration as a ta
   const supervisor = new Supervisor(ledger, runner, clock, { leaseMs: 60 });
   supervisor.createGoal(goal()); supervisor.planWake("worker", clock.now().toISOString(), "renew lease");
   assert.equal((await supervisor.tick())?.status, "done");
-  assert.equal(ledger.events().some((event) => event.kind === "wake.lease_renewed"), true);
+  assert.equal(ledger.events().some((event) => event.type === "wake.lease_renewed"), true);
   ledger.close();
 });
 
@@ -194,9 +196,9 @@ test("verification plane enforces blind-first audit and reports calibrated metri
   const ledger = createMemoryLedger({ clock });
   const supervisor = new Supervisor(ledger, fauxRunner([]), clock);
   supervisor.createGoal(goal());
-  const evidence = ledger.appendEvent({ ts: clock.now().toISOString(), agent: "worker", kind: "tool.fact", data: { value: 1 }, wakeId: "w" });
+  const evidence = ledger.appendEvent({ ...event("worker", "tool.fact", { value: 1 }, "w"), ts: clock.now().toISOString() });
   ledger.requestAction({ id: "a", agent: "worker", kind: "mock.write", connector: "mock", payload: {}, reason: "private rationale", evidence: [evidence.seq], gated: false, status: "requested", reconciledAt: null, externalRef: null, auditAdvice: null, adviceAcked: false }, "worker", "w");
-  ledger.appendEvent({ ts: clock.now().toISOString(), agent: "worker", kind: "handoff.recorded", data: { results: ["claimed"] }, wakeId: "w" });
+  ledger.appendEvent({ ...event("worker", "handoff.recorded", { results: ["claimed"] }, "w"), ts: clock.now().toISOString() });
   let blindPayload = "";
   const model: VerifierModel = {
     verifySession: async () => ({ findings: [{ actionId: "a", body: { issue: "unsupported" }, evidence: [evidence.seq], riskWeight: 2 }], tokensUsed: 10 }),
@@ -224,9 +226,9 @@ test("two agents run concurrently while CEO context and dashboard see the organi
   const ledger = createMemoryLedger({ clock });
   const runner = fauxRunner([{ delayMs: 50 }, { handoff: { handoff: { observations: [], results: ["done"], nextSteps: [] }, mail: [], nextWakeAt: null } }]);
   const supervisor = new Supervisor(ledger, runner, clock, { profiles: [{ agent: "ceo", role: "ceo" }, { agent: "a", role: "child" }, { agent: "b", role: "child" }] });
-  ledger.putGoal({ id: "root", parentId: null, objective: "organization", metric, target: 1, owner: "ceo", phase: "active", revision: 0 }, "human");
-  ledger.putGoal({ id: "a-goal", parentId: "root", objective: "a", metric, target: 1, owner: "a", phase: "active", revision: 0 }, "ceo");
-  ledger.putGoal({ id: "b-goal", parentId: "root", objective: "b", metric, target: 1, owner: "b", phase: "active", revision: 0 }, "ceo");
+  ledger.putGoal({ id: "root", parentId: null, objective: "organization", owner: "ceo", phase: "active", revision: 0 }, "human");
+  ledger.putGoal({ id: "a-goal", parentId: "root", objective: "a", owner: "a", phase: "active", revision: 0 }, "ceo");
+  ledger.putGoal({ id: "b-goal", parentId: "root", objective: "b", owner: "b", phase: "active", revision: 0 }, "ceo");
   supervisor.planWake("a", clock.now().toISOString(), "a");
   supervisor.planWake("b", clock.now().toISOString(), "b");
   const completed = await supervisor.runAvailable(2);
@@ -237,7 +239,8 @@ test("two agents run concurrently while CEO context and dashboard see the organi
   const ceoSupervisor = new Supervisor(ledger, fauxRunner([{ handoff: { handoff: { observations: [], results: [], nextSteps: [] }, mail: [], nextWakeAt: null } }], ceoContext), clock, { profiles: [{ agent: "ceo", role: "ceo" }] });
   ceoSupervisor.planWake("ceo", clock.now().toISOString(), "replan");
   await ceoSupervisor.tick();
-  assert.equal((JSON.parse(readFileSync(ceoContext, "utf8")) as { goals: unknown[] }).goals.length, 3);
+  const ceoText = (JSON.parse(readFileSync(ceoContext, "utf8")) as { text: string }).text;
+  for (const id of ["root", "a-goal", "b-goal"]) assert.match(ceoText, new RegExp(`\\[${id}\\]`));
 
   const controller = new AbortController();
   setTimeout(() => controller.abort(), 20);
@@ -277,8 +280,8 @@ test("official Pi agent core worker completes a structured handoff through the p
   const supervisor = new Supervisor(ledger, runner, clock);
   supervisor.createGoal(goal()); supervisor.planWake("worker", clock.now().toISOString(), "pi integration");
   assert.equal((await supervisor.tick())?.status, "done");
-  assert.equal(ledger.events().some((event) => event.kind.startsWith("runner.pi.")), true);
-  assert.equal(ledger.events().some((event) => event.kind === "runner.context.compacted"), true);
+  assert.equal(ledger.events().some((event) => event.type === "session.started"), true);
+  assert.equal(ledger.events().some((event) => event.type === "request.prepared"), true);
   assert.deepEqual(ledger.lastEvent("worker", "handoff.recorded")?.data, { observations: ["pi core ran"], results: ["ok"], nextSteps: [] });
   ledger.close();
 });
@@ -287,7 +290,7 @@ test("bidirectional runner RPC applies child capabilities and rejects parent-onl
   const clock = new SimulatedClock();
   const ledger = createMemoryLedger({ clock });
   const connector = new MockConnector();
-  const seed = ledger.appendEvent({ ts: clock.now().toISOString(), agent: "worker", kind: "fact", data: { text: "rpcseed" }, wakeId: null });
+  const seed = ledger.appendEvent({ ...event("worker", "fact", { text: "rpcseed" }), ts: clock.now().toISOString() });
   const runner = fauxRunner([
     { rpc: { method: "ledger.search", params: { query: "rpcseed" } } },
     { rpc: { method: "mail.send", params: { to: "human", level: "fyi", body: { message: "working" } } } },
@@ -302,7 +305,7 @@ test("bidirectional runner RPC applies child capabilities and rejects parent-onl
   assert.equal(ledger.action("rpc-action")?.status, "confirmed");
   assert.equal(ledger.mailbox().some((mail) => mail.to === "human"), true);
   assert.equal(ledger.schedules()[0]?.nextWakeAt, "2026-08-20T00:00:00.000Z");
-  assert.equal(ledger.events().filter((event) => event.kind.startsWith("rpc.")).length, 4);
+  assert.equal(ledger.events().filter((event) => event.type.startsWith("rpc.")).length, 4);
 
   const denied = new Supervisor(ledger, fauxRunner([{ rpc: { method: "goal.put", params: { goal: { ...goal(), revision: 1 } } } }]), clock, { profiles: [{ agent: "worker", role: "child" }] });
   clock.advance(1);
@@ -315,8 +318,8 @@ test("bidirectional runner RPC applies child capabilities and rejects parent-onl
 test("CEO role can create a child goal and receives its dedicated system prompt", async () => {
   const clock = new SimulatedClock();
   const ledger = createMemoryLedger({ clock });
-  const root = { id: "ceo-root", parentId: null, objective: "build organization", metric, target: 1, owner: "ceo", phase: "active", revision: 0 } as const;
-  const child = { id: "child", parentId: "ceo-root", objective: "own metric", metric, target: 1, owner: "worker", phase: "active", revision: 0 } as const;
+  const root = { id: "ceo-root", parentId: null, objective: "build organization", owner: "ceo", phase: "active", revision: 0 } as const;
+  const child = { id: "child", parentId: "ceo-root", objective: "own metric", owner: "worker", phase: "active", revision: 0 } as const;
   const contextFile = join(mkdtempSync(join(tmpdir(), "goah-ceo-")), "context.json");
   const supervisor = new Supervisor(ledger, fauxRunner([
     { rpc: { method: "goal.put", params: { goal: child } } },
@@ -334,7 +337,7 @@ test("process verifier model runs on official Pi core and writes advice", async 
   const ledger = createMemoryLedger({ clock });
   const supervisor = new Supervisor(ledger, fauxRunner([]), clock);
   supervisor.createGoal(goal());
-  const evidence = ledger.appendEvent({ ts: clock.now().toISOString(), agent: "worker", kind: "fact", data: {}, wakeId: "verify-wake" });
+  const evidence = ledger.appendEvent({ ...event("worker", "fact", {}, "verify-wake"), ts: clock.now().toISOString() });
   ledger.requestAction({ id: "verify-action", agent: "worker", kind: "mock", connector: "mock", payload: {}, reason: "r", evidence: [evidence.seq], gated: false, status: "requested", reconciledAt: null, externalRef: null, auditAdvice: null, adviceAcked: false }, "worker", "verify-wake");
   const model = new ProcessVerifierModel({ command: process.execPath, args: [verificationWorkerPath()], env: { GOAH_PI_PROVIDER: "faux", GOAH_PI_MODEL: "faux-verifier", GOAH_VERIFIER_FAUX_FINDINGS: JSON.stringify([{ actionId: "verify-action", body: { issue: "found" }, evidence: [evidence.seq], riskWeight: 3 }]) } });
   await new VerificationPlane(ledger, supervisor, model).verifySession("verify-wake");
@@ -349,8 +352,8 @@ test("post-wake metric verification closes a failing repo-health loop", async ()
   const ledger = createMemoryLedger({ clock });
   const runner = fauxRunner([{ write: { path: "healthy.txt", content: "ok\n" } }, { handoff: { handoff: { observations: ["failed first"], results: ["repaired"], nextSteps: [] }, mail: [], nextWakeAt: null } }], undefined, repo);
   const supervisor = new Supervisor(ledger, runner, clock, { verifyMetricsAfterWake: true });
-  supervisor.createGoal({ id: "health", parentId: null, objective: "keep healthy", owner: "worker", target: 1, phase: "active", revision: 0, metric: { source: "repo.health", window: "latest", direction: "at_least", target: 1, freshnessMs: 10_000, onMissing: "wake_owner", onStale: "wake_owner" } });
-  supervisor.registerMetricCollector("health", {
+  supervisor.createGoal({ id: "health", parentId: null, objective: "keep healthy", owner: "worker", phase: "active", revision: 0 });
+  supervisor.registerMetricCollector("health", { source: "repo.health", window: "latest", direction: "at_least", target: 1, freshnessMs: 10_000, onMissing: "wake_owner", onStale: "wake_owner" }, {
     command: process.execPath,
     args: ["-e", "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const r=JSON.parse(s);const fs=require('fs');process.stdout.write(JSON.stringify({goalId:r.goalId,source:'repo.health',observedAt:new Date().toISOString(),value:fs.existsSync(process.env.GOAH_HEALTH_FILE)?1:0}))})"],
     env: { GOAH_HEALTH_FILE: healthFile },

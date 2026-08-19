@@ -1,6 +1,6 @@
 {
   "name": "goah-runner-pi",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -25,6 +25,6 @@
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.84.2",
     "@earendil-works/pi-ai": "0.84.2",
-    "goah-ledger-contract": "0.2.0"
+    "goah-ledger-contract": "0.3.0"
   }
 }

@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import {
   capabilityFor,
+  controlStream,
   evaluateMetric,
+  interruptedSessionEvents,
   type ActionSnapshot,
   type AgentCapability,
   type AgentProfile,
@@ -16,14 +18,19 @@ import {
   type JsonValue,
   type Ledger,
   type MetricEvaluation,
+  type MetricContract,
   type MetricProcessSpec,
   type MetricSample,
   type Runner,
   type RunnerHandle,
   type ScheduleSnapshot,
   type WakeSnapshot,
+  wakeStream,
 } from "goah-ledger-contract";
+import { composeActiveContext } from "./context-view.js";
 import { defaultRolePrompt } from "./roles.js";
+
+export { composeActiveContext, type ActiveContextInput, type ActiveContextView } from "./context-view.js";
 
 export interface SupervisorOptions {
   leaseMs?: number;
@@ -36,7 +43,7 @@ export interface SupervisorOptions {
   verifyMetricsAfterWake?: boolean;
 }
 
-interface MetricCollectorRegistration { goalId: string; spec: MetricProcessSpec; intervalMs: number; nextAt: number }
+interface MetricCollectorRegistration { goalId: string; contract: MetricContract; spec: MetricProcessSpec; intervalMs: number; nextAt: number }
 
 export class Supervisor {
   readonly #leaseMs: number;
@@ -46,6 +53,7 @@ export class Supervisor {
   #claimTail: Promise<void> = Promise.resolve();
   readonly #connectors = new Map<string, ConnectorProcessSpec>();
   readonly #metricCollectors = new Map<string, MetricCollectorRegistration>();
+  readonly #metricContracts = new Map<string, MetricContract>();
   readonly #heartbeatPolicies: NonNullable<SupervisorOptions["heartbeatPolicies"]>;
   readonly #retryPolicy: NonNullable<SupervisorOptions["retryPolicy"]>;
   readonly #profiles: Map<string, AgentProfile>;
@@ -63,8 +71,10 @@ export class Supervisor {
   }
 
   registerConnector(connector: ConnectorProcessSpec): void { this.#connectors.set(connector.manifest.connector, connector); }
-  registerMetricCollector(goalId: string, spec: MetricProcessSpec, intervalMs = 60_000): void {
-    this.#metricCollectors.set(goalId, { goalId, spec, intervalMs, nextAt: 0 });
+  registerMetricContract(goalId: string, contract: MetricContract): void { this.#metricContracts.set(goalId, contract); }
+  registerMetricCollector(goalId: string, contract: MetricContract, spec: MetricProcessSpec, intervalMs = 60_000): void {
+    this.registerMetricContract(goalId, contract);
+    this.#metricCollectors.set(goalId, { goalId, contract, spec, intervalMs, nextAt: 0 });
   }
   createGoal(goal: GoalSnapshot, actor = "human"): void { this.ledger.putGoal(goal, actor); }
 
@@ -97,7 +107,7 @@ export class Supervisor {
         wake: running,
         context,
         now: () => this.#now(),
-        emit: (trace) => this.ledger.appendRunnerEvent({ ts: this.#now(), agent: running.agent, kind: `runner.${trace.kind}`, data: trace.data, wakeId: running.id }, leaseToken),
+        emit: (trace) => this.ledger.appendRunnerEvent({ streamId: wakeStream(running.id), ts: this.#now(), actor: running.agent, type: trace.type, data: trace.data }, leaseToken),
         rpc: (method, params) => this.#agentRpc(running, leaseToken, method, params),
       });
       if (handle.pid) running = this.ledger.attachWakeProcess(running.id, leaseToken, handle.pid, this.#now());
@@ -198,10 +208,12 @@ export class Supervisor {
   recordMetric(sample: MetricSample): MetricEvaluation {
     const goal = this.ledger.goal(sample.goalId);
     if (!goal) throw new Error(`metric goal not found: ${sample.goalId}`);
-    if (goal.metric.source !== sample.source) throw new Error("metric source does not match goal contract");
-    this.ledger.appendEvent({ ts: this.#now(), agent: "supervisor", kind: "metric.sampled", data: sample as unknown as JsonValue, wakeId: null });
-    const evaluation = evaluateMetric(goal.metric, this.ledger.metricSamples(goal.id), this.#now());
-    this.ledger.appendEvent({ ts: this.#now(), agent: "supervisor", kind: "metric.evaluated", data: evaluation as unknown as JsonValue, wakeId: null });
+    const contract = this.#metricContracts.get(goal.id);
+    if (!contract) throw new Error(`metric contract is not registered: ${goal.id}`);
+    if (contract.source !== sample.source) throw new Error("metric source does not match registered contract");
+    this.ledger.appendEvent({ streamId: `metric:${goal.id}`, ts: this.#now(), actor: "supervisor", type: "metric.sampled", data: sample as unknown as JsonValue });
+    const evaluation = evaluateMetric(contract, this.ledger.metricSamples(goal.id), this.#now());
+    this.ledger.appendEvent({ streamId: `metric:${goal.id}`, ts: this.#now(), actor: "supervisor", type: "metric.evaluated", data: evaluation as unknown as JsonValue });
     if (evaluation.shouldWakeOwner) this.#enqueueTrigger(goal.owner, `metric:${goal.id}:${sample.observedAt}`);
     return evaluation;
   }
@@ -245,7 +257,9 @@ export class Supervisor {
   async #markAbnormal(wake: WakeSnapshot, reason: string): Promise<void> {
     const current = this.#wake(wake.id);
     if (current.runnerPid) await this.runner.terminateProcess(current.runnerPid);
-    this.ledger.appendEvent({ ts: this.#now(), agent: current.agent, kind: "wake.abnormal_reason", data: { reason }, wakeId: current.id });
+    this.ledger.appendEvent({ streamId: wakeStream(current.id), ts: this.#now(), actor: current.agent, type: "wake.abnormal_reason", data: { reason } });
+    const repairs = interruptedSessionEvents(this.ledger.eventsForWake(current.id), this.#now(), "supervisor");
+    if (repairs.length) this.ledger.appendEvents(repairs);
     if (["leased", "running", "queued"].includes(current.status)) {
       this.ledger.finishWake(current.id, "abnormal", this.#now());
       if (current.attempt < this.#retryPolicy.maxAttempts) {
@@ -265,7 +279,7 @@ export class Supervisor {
     if (exact) return exact;
     const queued = this.ledger.queuedWakeForAgent(agent);
     if (queued) {
-      this.ledger.appendEvent({ ts: this.#now(), agent: "supervisor", kind: "wake.trigger_coalesced", data: { wakeId: queued.id, triggerRef }, wakeId: queued.id });
+      this.ledger.appendEvent({ streamId: wakeStream(queued.id), ts: this.#now(), actor: "supervisor", type: "wake.trigger_coalesced", data: { wakeId: queued.id, triggerRef } });
       return queued;
     }
     const wake: WakeSnapshot = { id: randomUUID(), agent, triggerRef, status: "queued", leaseUntil: null, attempt: 0, startedAt: null, endedAt: null, enqueuedSeq: 0, leaseToken: null, runnerPid: null };
@@ -280,16 +294,16 @@ export class Supervisor {
     const role = this.#profiles.get(wake.agent)?.role ?? "child";
     const goals = role === "ceo" ? this.ledger.goals() : this.ledger.goalsForOwner(wake.agent);
     const mail = this.ledger.unreadMail(wake.agent);
-    const auditAdvice = this.ledger.unackedAuditAdvice(wake.agent).map((action) => ({ actionId: action.id, advice: action.auditAdvice }));
     const handoff = this.ledger.lastEvent(wake.agent, "handoff.recorded");
     const recoveryId = wake.triggerRef.startsWith("recovery:")
       ? wake.triggerRef.slice("recovery:".length)
       : wake.triggerRef.startsWith("retry:") ? wake.triggerRef.slice("retry:".length).split("@")[0] : null;
     const recoveryEvents = recoveryId ? this.ledger.eventsForWake(recoveryId) : [];
     const teamHandoffs = role === "ceo"
-      ? [...this.ledger.eventsSince(0, ["handoff.recorded"])].reverse().filter((event, index, all) => all.findIndex((candidate) => candidate.agent === event.agent) === index).map((event) => ({ agent: event.agent, handoff: event.data }))
+      ? [...this.ledger.eventsSince(0, ["handoff.recorded"])].reverse().filter((event, index, all) => all.findIndex((candidate) => candidate.actor === event.actor) === index)
       : [];
-    return { role, systemPrompt: this.#profiles.get(wake.agent)?.systemPrompt ?? defaultRolePrompt(role), goals, mail, auditAdvice, lastHandoff: handoff?.data ?? null, teamHandoffs, recoveryEvents } as unknown as JsonValue;
+    const actions = this.ledger.actions().filter((action) => action.agent === wake.agent && (action.status === "unknown" || Boolean(action.auditAdvice && !action.adviceAcked)));
+    return composeActiveContext({ role, systemPrompt: this.#profiles.get(wake.agent)?.systemPrompt ?? defaultRolePrompt(role), wake, goals, mail, actions, lastHandoff: handoff, teamHandoffs, recoveryEvents }) as unknown as JsonValue;
   }
 
   #requiredConnector(name: string): ConnectorProcessSpec { const value = this.#connectors.get(name); if (!value) throw new Error(`connector not registered: ${name}`); return value; }
@@ -303,7 +317,7 @@ export class Supervisor {
     const profile = this.#profiles.get(wake.agent) ?? { agent: wake.agent, role: "child" as const };
     const allowed = new Set(profile.capabilities ?? defaultCapabilities(profile.role));
     if (!allowed.has(method)) throw new Error(`${profile.role} agent is not allowed to call ${method}`);
-    this.ledger.appendRunnerEvent({ ts: this.#now(), agent: wake.agent, kind: `rpc.${method}`, data: params, wakeId: wake.id }, leaseToken);
+    this.ledger.appendRunnerEvent({ streamId: wakeStream(wake.id), ts: this.#now(), actor: wake.agent, type: `rpc.${method}`, data: params }, leaseToken);
     const input = asRecord(params);
     if (method === "ledger.search") return this.ledger.searchEvents(String(input.query), Number(input.limit ?? 20)) as unknown as JsonValue;
     if (method === "mail.send") {
@@ -331,9 +345,11 @@ export class Supervisor {
   }
 
   #scheduleMetricAndHeartbeatAlerts(): void {
-    for (const goal of this.ledger.goals()) {
+    for (const [goalId, contract] of this.#metricContracts) {
+      const goal = this.ledger.goal(goalId);
+      if (!goal) continue;
       const samples = this.ledger.metricSamples(goal.id);
-      const evaluation = evaluateMetric(goal.metric, samples, this.#now());
+      const evaluation = evaluateMetric(contract, samples, this.#now());
       if (evaluation.shouldWakeOwner) this.#enqueueTrigger(goal.owner, `metric:${goal.id}:${evaluation.status}:${samples.at(-1)?.observedAt ?? "none"}`);
     }
     for (const policy of this.#heartbeatPolicies) {
@@ -342,7 +358,7 @@ export class Supervisor {
       if (this.clock.now().getTime() - Date.parse(baseline) <= policy.maxSilentMs) continue;
       const trigger = `heartbeat:${policy.agent}:${last?.seq ?? 0}`;
       if (this.ledger.wakeByTrigger(policy.escalateTo, trigger)) continue;
-      this.ledger.appendEvent({ ts: this.#now(), agent: "supervisor", kind: "watchdog.heartbeat_violation", data: { agent: policy.agent, lastHandoffAt: last?.ts ?? null, escalateTo: policy.escalateTo }, wakeId: null });
+      this.ledger.appendEvent({ streamId: controlStream("watchdog"), ts: this.#now(), actor: "supervisor", type: "watchdog.heartbeat_violation", data: { agent: policy.agent, lastHandoffAt: last?.ts ?? null, escalateTo: policy.escalateTo } });
       this.#enqueueTrigger(policy.escalateTo, trigger);
     }
   }

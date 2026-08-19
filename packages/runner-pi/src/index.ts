@@ -15,7 +15,7 @@ import {
 export { createPiModel, parseModelCapabilities } from "./model-provider.js";
 
 export interface PiStep {
-  trace?: Array<{ kind: string; data: JsonValue }>;
+  trace?: Array<{ type: string; data: JsonValue }>;
   handoff?: WakeOutput;
   stopped?: boolean;
 }
@@ -79,7 +79,7 @@ export function verificationWorkerPath(): string { return fileURLToPath(new URL(
 
 type WorkerRequest = Omit<RunRequest, "now" | "emit" | "rpc">;
 type WorkerMessage =
-  | { type: "trace"; event: { kind: string; data: JsonValue } }
+  | { type: "trace"; event: { type: string; data: JsonValue } }
   | { type: "rpc_request"; id: string; method: AgentCapability; params: JsonValue }
   | { type: "result"; result: RunnerResult };
 type ParentMessage =
@@ -158,7 +158,7 @@ export class ProcessRunner implements Runner {
 }
 
 export type WorkerRpc = (method: AgentCapability, params: JsonValue) => Promise<JsonValue>;
-export type WorkerRun = (request: WorkerRequest, emit: (event: { kind: string; data: JsonValue }) => void, rpc: WorkerRpc) => Promise<RunnerResult>;
+export type WorkerRun = (request: WorkerRequest, emit: (event: { type: string; data: JsonValue }) => void, rpc: WorkerRpc) => Promise<RunnerResult>;
 
 /** Entry helper for runner executables. It exits when its parent disappears. */
 export async function runProcessWorker(run: WorkerRun): Promise<void> {

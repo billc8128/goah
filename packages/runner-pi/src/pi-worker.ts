@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { Agent, type AgentMessage, type AgentTool } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage, fauxToolCall, Type, type Message } from "@earendil-works/pi-ai";
-import type { AgentCapability, JsonValue, RunnerResult, WakeOutput } from "goah-ledger-contract";
+import type { AgentCapability, JsonValue, RunnerResult, SessionMessage, WakeOutput } from "goah-ledger-contract";
 import { runProcessWorker, type WorkerRpc } from "./index.js";
 import { createPiModel, providerApiKey } from "./model-provider.js";
 
@@ -37,25 +37,57 @@ export async function runPiWorker(): Promise<void> {
 
     let output: WakeOutput | null = null;
     let compactions = 0;
+    let messageCounter = 0;
+    const messageIds = new WeakMap<object, string>();
+    const emittedUsers = new Set<string>();
+    const idFor = (message: AgentMessage): string => {
+      if (typeof message !== "object" || message === null) return `message:${++messageCounter}`;
+      const existing = messageIds.get(message);
+      if (existing) return existing;
+      const id = `message:${++messageCounter}`;
+      messageIds.set(message, id);
+      return id;
+    };
     const root = resolve(process.cwd());
     const tools = createTools(root, (value) => { output = value; }, process.env.GOAH_PI_ALLOW_BASH === "true", rpc, request.wake.startedAt);
     const contextPolicy = resolveContextPolicy(model.contextWindow, process.env);
-    emit({ kind: "model.capabilities", data: { provider, model: modelId, contextWindowTokens: model.contextWindow, maxOutputTokensPerTurn: model.maxTokens, ...contextPolicy } });
-    const suppliedPrompt = typeof request.context === "object" && request.context !== null && !Array.isArray(request.context) && typeof request.context.systemPrompt === "string" ? request.context.systemPrompt : undefined;
+    emit({ type: "session.started", data: { provider, model: modelId, runner: "pi", contextWindowTokens: model.contextWindow, maxOutputTokensPerTurn: model.maxTokens } });
+    const contextRecord = typeof request.context === "object" && request.context !== null && !Array.isArray(request.context) ? request.context : {};
+    const suppliedPrompt = typeof contextRecord.systemPrompt === "string" ? contextRecord.systemPrompt : undefined;
+    const activeContext = typeof contextRecord.text === "string" ? contextRecord.text : JSON.stringify(request.context);
+    const sourceSeqs = Array.isArray(contextRecord.sourceSeqs) ? contextRecord.sourceSeqs.filter((value): value is number => Number.isInteger(value)) : [];
+    const systemPrompt = `${process.env.GOAH_PI_SYSTEM_PROMPT ?? suppliedPrompt ?? "You are a goal-oriented worker."}\nYou must finish by calling handoff exactly once. Treat the supplied context as authoritative.`;
     const agent = new Agent({
       initialState: {
-        systemPrompt: `${process.env.GOAH_PI_SYSTEM_PROMPT ?? suppliedPrompt ?? "You are a goal-oriented worker."}\nYou must finish by calling handoff exactly once. Treat the supplied context as authoritative.`,
+        systemPrompt,
         model,
         tools,
       },
-      streamFn: models.streamSimple.bind(models),
+      streamFn: async (requestModel, context, options) => {
+        emit({
+          type: "request.prepared",
+          data: {
+            provider: requestModel.provider,
+            model: requestModel.id,
+            systemPrompt: context.systemPrompt ?? "",
+            activeContext,
+            messages: JSON.parse(JSON.stringify(context.messages)) as JsonValue,
+            tools: (context.tools ?? []).map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters as unknown as JsonValue })),
+            modelConfig: JSON.parse(JSON.stringify(options ?? {})) as JsonValue,
+            sourceSeqs,
+          },
+        });
+        return models.streamSimple(requestModel, context, options);
+      },
       getApiKey: (id) => providerApiKey(id),
       transformContext: async (messages) => {
         let view = messages;
         if (estimateMessages(messages) >= contextPolicy.compactAtTokens) {
           compactions += 1;
-          emit({ kind: "context.compacted", data: { compaction: compactions, sourceMessageCount: messages.length } });
           view = compactMessagesToTokenBudget(messages, contextPolicy.retainAfterCompactTokens);
+          const retained = new Set(view.filter((message) => messages.includes(message)));
+          const summary = view.find((message) => !messages.includes(message));
+          if (summary) emit({ type: "context.compacted", data: { compaction: compactions, sourceMessageCount: messages.length, replacedMessageIds: messages.filter((message) => !retained.has(message)).map(idFor), retainedMessageIds: messages.filter((message) => retained.has(message)).map(idFor), summaryMessageId: idFor(summary), summary: messageText(summary) } });
         }
         return view;
       },
@@ -63,12 +95,29 @@ export async function runPiWorker(): Promise<void> {
       toolExecution: "sequential",
     });
     agent.subscribe((event) => {
-      emit({ kind: `pi.${event.type}`, data: JSON.parse(JSON.stringify(event)) as JsonValue });
+      if (event.type === "turn_start") emit({ type: "turn.started", data: {} });
+      else if (event.type === "message_start" && event.message.role === "user") {
+        const id = idFor(event.message);
+        if (!emittedUsers.has(id)) { emittedUsers.add(id); emit({ type: "message.user", data: { message: sessionMessage(event.message, id) as unknown as JsonValue } }); }
+      } else if (event.type === "message_update") {
+        emit({ type: "message.assistant.delta", data: { messageId: idFor(event.message), delta: JSON.parse(JSON.stringify(event.assistantMessageEvent)) as JsonValue } });
+      } else if (event.type === "message_end" && event.message.role === "assistant") {
+        emit({ type: "message.assistant.completed", data: { message: sessionMessage(event.message, idFor(event.message)) as unknown as JsonValue } });
+      } else if (event.type === "tool_execution_start") emit({ type: "tool.called", data: { callId: event.toolCallId, name: event.toolName, arguments: JSON.parse(JSON.stringify(event.args)) as JsonValue } });
+      else if (event.type === "tool_execution_end") emit({ type: "tool.completed", data: { callId: event.toolCallId, messageId: `tool:${event.toolCallId}`, name: event.toolName, result: JSON.parse(JSON.stringify(event.result)) as JsonValue, isError: event.isError } });
+      else if (event.type === "turn_end") emit({ type: "turn.completed", data: {} });
+      else if (event.type === "agent_end") emit({ type: "session.completed", data: {} });
     });
-    await agent.prompt(`Wake started at: ${request.wake.startedAt ?? "unknown"}\nWake context:\n${JSON.stringify(request.context)}\n\nRunner root: ${root}. Manage local files and Git directly when the goal requires them.`);
+    await agent.prompt(`Wake started at: ${request.wake.startedAt ?? "unknown"}\n\n${activeContext}\n\nRunner root: ${root}. Manage local files directly when the goal requires them.`);
     if (!output) return { outcome: "abnormal", reason: "Pi worker exited without a valid handoff" };
     return { outcome: "handoff", output };
   });
+}
+
+function sessionMessage(message: AgentMessage, id: string): SessionMessage {
+  const value = JSON.parse(JSON.stringify(message)) as Record<string, unknown>;
+  const role = message.role === "assistant" ? "assistant" : message.role === "user" ? "user" : "tool";
+  return { id, role, content: (value.content ?? value) as JsonValue, ...(value.usage !== undefined ? { usage: value.usage as JsonValue } : {}) };
 }
 
 function createTools(root: string, handoff: (output: WakeOutput) => void, allowBash: boolean, rpc: WorkerRpc, wakeStartedAt: string | null): AgentTool<any>[] {

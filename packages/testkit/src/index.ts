@@ -27,7 +27,7 @@ export function createMemoryLedger(options: SqliteLedgerOptions = {}): SqliteLed
 
 export interface FauxStep {
   advanceMs?: number;
-  trace?: Array<{ kind: string; data: JsonValue }>;
+  trace?: Array<{ type: string; data: JsonValue }>;
   write?: { path: string; content: string };
   handoff?: WakeOutput;
   stop?: boolean;
@@ -91,8 +91,7 @@ export interface LedgerConformanceFactory { (clock: Clock): Ledger }
 export function assertLedgerConformance(create: LedgerConformanceFactory): void {
   const clock = new SimulatedClock("2030-01-01T00:00:00.000Z");
   const ledger = create(clock);
-  const metric = { source: "test", window: "1h", direction: "at_least" as const, target: 1, freshnessMs: 1_000, onMissing: "abnormal" as const, onStale: "wake_owner" as const };
-  ledger.putGoal({ id: "root", parentId: null, objective: "test", metric, target: 1, owner: "a", phase: "active", revision: 0 }, "human");
+  ledger.putGoal({ id: "root", parentId: null, objective: "test", owner: "a", phase: "active", revision: 0 }, "human");
   const first = ledger.enqueueWake({ id: "z", agent: "a", triggerRef: "first", status: "queued", leaseUntil: null, attempt: 0, startedAt: null, endedAt: null, enqueuedSeq: 0, leaseToken: null, runnerPid: null }, "supervisor");
   ledger.enqueueWake({ id: "a", agent: "b", triggerRef: "second", status: "queued", leaseUntil: null, attempt: 0, startedAt: null, endedAt: null, enqueuedSeq: 0, leaseToken: null, runnerPid: null }, "supervisor");
   const claimed = ledger.claimNextWake(clock.now().toISOString(), "2030-01-01T00:01:00.000Z", "lease");

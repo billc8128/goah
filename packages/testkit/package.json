@@ -1,6 +1,6 @@
 {
   "name": "goah-testkit",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -23,9 +23,9 @@
   "types": "./dist/index.d.ts",
   "exports": "./dist/index.js",
   "dependencies": {
-    "goah-ledger-contract": "0.2.0",
-    "goah-ledger-sqlite": "0.2.0",
-    "goah-runner-pi": "0.2.0",
-    "goah-supervisor": "0.2.0"
+    "goah-ledger-contract": "0.3.0",
+    "goah-ledger-sqlite": "0.3.0",
+    "goah-runner-pi": "0.3.0",
+    "goah-supervisor": "0.3.0"
   }
 }

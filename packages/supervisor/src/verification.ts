@@ -1,4 +1,4 @@
-import type { ActionSnapshot, EventRecord, JsonValue, Ledger } from "goah-ledger-contract";
+import { controlStream, wakeStream, type ActionSnapshot, type EventRecord, type JsonValue, type Ledger } from "goah-ledger-contract";
 import { spawn } from "node:child_process";
 import type { Supervisor } from "./index.js";
 
@@ -45,23 +45,23 @@ export class VerificationPlane {
 
   async verifySession(wakeId: string): Promise<VerificationResult> {
     const trace = this.ledger.eventsForWake(wakeId);
-    const handoff = trace.findLast((event) => event.kind === "handoff.recorded")?.data ?? null;
+    const handoff = trace.findLast((event) => event.type === "handoff.recorded")?.data ?? null;
     const seqs = new Set(trace.map((event) => event.seq));
     const actions = this.ledger.actions().filter((action) => action.evidence.some((seq) => seqs.has(seq)));
     const result = await this.model.verifySession({ wakeId, handoff, trace, actions });
     this.#apply(result, "verifier", wakeId);
-    this.ledger.appendEvent({ ts: this.supervisor.clock.now().toISOString(), agent: "verifier", kind: "verification.completed", data: { wakeId, findings: result.findings.length, tokensUsed: result.tokensUsed }, wakeId });
+    this.ledger.appendEvent({ streamId: wakeStream(wakeId), ts: this.supervisor.clock.now().toISOString(), actor: "verifier", type: "verification.completed", data: { wakeId, findings: result.findings.length, tokensUsed: result.tokensUsed } });
     return result;
   }
 
   async auditGlobal(sinceSeq = 0): Promise<{ blind: VerificationResult; reasoned: VerificationResult }> {
-    const facts = this.ledger.eventsSince(sinceSeq).filter((event) => !["handoff.recorded", "runner.note"].includes(event.kind)).map(blindFact);
+    const facts = this.ledger.eventsSince(sinceSeq).filter((event) => !["handoff.recorded", "runner.note"].includes(event.type)).map(blindFact);
     const blind = await this.model.blindAudit(facts);
     const reasons = this.ledger.actions().map((action) => ({ actionId: action.id, reason: action.reason, evidence: action.evidence }));
     const reasoned = await this.model.reasonAudit({ facts, reasons });
     this.#apply(blind, "audit");
     this.#apply(reasoned, "audit");
-    this.ledger.appendEvent({ ts: this.supervisor.clock.now().toISOString(), agent: "audit", kind: "audit.completed", data: { sinceSeq, blindFindings: blind.findings.length, reasonedFindings: reasoned.findings.length, tokensUsed: blind.tokensUsed + reasoned.tokensUsed }, wakeId: null });
+    this.ledger.appendEvent({ streamId: controlStream("audit"), ts: this.supervisor.clock.now().toISOString(), actor: "audit", type: "audit.completed", data: { sinceSeq, blindFindings: blind.findings.length, reasonedFindings: reasoned.findings.length, tokensUsed: blind.tokensUsed + reasoned.tokensUsed } });
     return { blind, reasoned };
   }
 
@@ -98,7 +98,7 @@ export function calibrateVerificationThreshold(labels: VerificationLabel[], pred
 }
 
 function blindFact(event: EventRecord): EventRecord {
-  if (!event.kind.startsWith("action.")) return event;
+  if (!event.type.startsWith("action.")) return event;
   const data = structuredClone(event.data) as Record<string, unknown>;
   const snapshot = data.snapshot as Record<string, unknown> | undefined;
   if (snapshot) { delete snapshot.reason; delete snapshot.evidence; delete snapshot.auditAdvice; }

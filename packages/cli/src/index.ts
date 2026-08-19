@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { CONTRACT_VERSION, evaluateMetric, type AgentProfile, type ConnectorManifest, type MetricProcessSpec } from "goah-ledger-contract";
+import { CONTRACT_VERSION, wakeStream, type AgentProfile, type ConnectorManifest, type MetricContract, type MetricProcessSpec } from "goah-ledger-contract";
 import { SQLITE_SCHEMA_VERSION, SqliteLedger } from "goah-ledger-sqlite";
 import { createPiModel, piWorkerPath, ProcessRunner } from "goah-runner-pi";
 import { renderDashboard, runSupervisorDaemon, Supervisor } from "goah-supervisor";
@@ -19,7 +19,7 @@ export interface GoahConfig {
   retryPolicy?: { maxAttempts: number; baseDelayMs: number };
   verifyMetricsAfterWake?: boolean;
   connectors?: Array<{ manifest: ConnectorManifest; command: string; args: string[]; env?: Record<string, string>; timeoutMs?: number }>;
-  metrics?: Array<{ goalId: string; intervalMs: number; process: MetricProcessSpec }>;
+  metrics?: Array<{ goalId: string; contract: MetricContract; intervalMs: number; process: MetricProcessSpec }>;
 }
 
 export type PiProvider = "anthropic" | "openai" | "ark-coding" | "faux";
@@ -66,7 +66,7 @@ export function createRuntime(config: GoahConfig): { ledger: SqliteLedger; super
     ...(config.verifyMetricsAfterWake !== undefined ? { verifyMetricsAfterWake: config.verifyMetricsAfterWake } : {}),
   });
   for (const connector of config.connectors ?? []) supervisor.registerConnector(connector);
-  for (const metric of config.metrics ?? []) supervisor.registerMetricCollector(metric.goalId, metric.process, metric.intervalMs);
+  for (const metric of config.metrics ?? []) supervisor.registerMetricCollector(metric.goalId, metric.contract, metric.process, metric.intervalMs);
   return { ledger, supervisor };
 }
 
@@ -151,17 +151,17 @@ export function diagnoseConfig(config: GoahConfig): { ok: boolean; checks: Docto
   return { ok: checks.every((item) => item.ok), checks };
 }
 
-export function statusSnapshot(ledger: SqliteLedger, now = new Date().toISOString()): object {
+export function statusSnapshot(ledger: SqliteLedger): object {
   const events = ledger.events();
   const wakes = ledger.wakes().map((wake) => {
-    const wakeEvents = events.filter((event) => event.wakeId === wake.id);
-    const abnormal = [...wakeEvents].reverse().find((event) => event.kind === "wake.abnormal_reason");
+    const wakeEvents = events.filter((event) => event.streamId === wakeStream(wake.id));
+    const abnormal = [...wakeEvents].reverse().find((event) => event.type === "wake.abnormal_reason");
     const tokensUsed = wakeEvents.reduce((total, event) => total + assistantTokens(event.data), 0);
     return { ...wake, tokensUsed, abnormalReason: abnormal ? field(abnormal.data, "reason") : null };
   });
-  const goals = ledger.goals().map((goal) => ({ ...goal, evaluation: evaluateMetric(goal.metric, ledger.metricSamples(goal.id), now) }));
-  const handoffs = events.filter((event) => event.kind === "handoff.recorded").slice(-20).map((event) => ({ seq: event.seq, ts: event.ts, agent: event.agent, wakeId: event.wakeId, handoff: event.data }));
-  const modelCapabilities = [...events].reverse().find((event) => event.kind === "runner.model.capabilities")?.data ?? null;
+  const goals = ledger.goals().map((goal) => ({ ...goal, evaluation: [...events].reverse().find((event) => event.streamId === `metric:${goal.id}` && event.type === "metric.evaluated")?.data ?? null }));
+  const handoffs = events.filter((event) => event.type === "handoff.recorded").slice(-20).map((event) => ({ seq: event.seq, ts: event.ts, agent: event.actor, streamId: event.streamId, handoff: event.data }));
+  const modelCapabilities = [...events].reverse().find((event) => event.type === "session.started")?.data ?? null;
   return { seq: events.at(-1)?.seq ?? 0, goals, wakes, actions: ledger.actions(), modelCapabilities, recentHandoffs: handoffs };
 }
 

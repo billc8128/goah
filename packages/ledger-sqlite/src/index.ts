@@ -7,30 +7,32 @@ import {
   type ActionStatus,
   type AuditAdvice,
   type Clock,
+  controlStream,
+  type EventInput,
   type EventRecord,
+  goalStream,
   type GoalSnapshot,
   type HandoffCommit,
   type JsonValue,
   type Ledger,
   type MailSnapshot,
   type MetricSample,
-  type ProjectionName,
   type ScheduleSnapshot,
   type WakeSnapshot,
+  wakeStream,
 } from "goah-ledger-contract";
 
 type FaultPoint = "after_event_before_projection";
 type FaultInjector = (point: FaultPoint) => void;
 type Row = Record<string, unknown>;
+type ProjectionName = "goals" | "schedule" | "wakes" | "mailbox" | "actions";
 
-export const SQLITE_SCHEMA_VERSION = 5;
+export const SQLITE_SCHEMA_VERSION = 6;
 
 const createGoals = `CREATE TABLE IF NOT EXISTS goals (
   id TEXT PRIMARY KEY,
   parent_id TEXT REFERENCES goals(id),
   objective TEXT NOT NULL,
-  metric TEXT NOT NULL CHECK(json_valid(metric)),
-  target TEXT NOT NULL CHECK(json_valid(target)),
   owner TEXT NOT NULL,
   phase TEXT NOT NULL,
   revision INTEGER NOT NULL CHECK(revision >= 0)
@@ -74,18 +76,18 @@ const indexesAndTriggers = `
 CREATE UNIQUE INDEX IF NOT EXISTS wakes_one_active_agent ON wakes(agent) WHERE status IN ('leased','running');
 CREATE INDEX IF NOT EXISTS wakes_queue_order ON wakes(status, enqueued_seq);
 CREATE INDEX IF NOT EXISTS schedule_due ON schedule(next_wake_at);
-CREATE INDEX IF NOT EXISTS events_agent_kind_seq ON events(agent, kind, seq DESC);
-CREATE INDEX IF NOT EXISTS events_wake_seq ON events(wake_id, seq);
-CREATE INDEX IF NOT EXISTS events_coalesced_trigger ON events(json_extract(data,'$.triggerRef'), wake_id) WHERE kind='wake.trigger_coalesced';
+CREATE INDEX IF NOT EXISTS events_actor_type_seq ON events(actor, type, seq DESC);
+CREATE INDEX IF NOT EXISTS events_stream_seq ON events(stream_id, stream_seq);
+CREATE INDEX IF NOT EXISTS events_coalesced_trigger ON events(json_extract(data,'$.triggerRef'), stream_id) WHERE type='wake.trigger_coalesced';
 CREATE INDEX IF NOT EXISTS actions_agent_status ON actions(agent, status);
-CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(agent, kind, data, content='events', content_rowid='seq');
+CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(actor, type, data, content='events', content_rowid='seq');
 
 CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
 BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events
 BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS events_fts_insert AFTER INSERT ON events
-BEGIN INSERT INTO events_fts(rowid,agent,kind,data) VALUES (new.seq,new.agent,new.kind,new.data); END;
+BEGIN INSERT INTO events_fts(rowid,actor,type,data) VALUES (new.seq,new.actor,new.type,new.data); END;
 
 CREATE TRIGGER IF NOT EXISTS wakes_valid_transition BEFORE UPDATE OF status ON wakes
 WHEN OLD.status <> NEW.status AND NOT (
@@ -108,11 +110,13 @@ BEGIN SELECT RAISE(ABORT, 'invalid action transition'); END;
 const schema = `
 CREATE TABLE IF NOT EXISTS events (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  stream_id TEXT NOT NULL,
+  stream_seq INTEGER NOT NULL CHECK(stream_seq > 0),
   ts TEXT NOT NULL,
-  agent TEXT NOT NULL,
-  kind TEXT NOT NULL,
+  actor TEXT NOT NULL,
+  type TEXT NOT NULL,
   data TEXT NOT NULL CHECK(json_valid(data)),
-  wake_id TEXT
+  UNIQUE(stream_id, stream_seq)
 ) STRICT;
 ${createGoals}
 CREATE TABLE IF NOT EXISTS schedule (
@@ -160,21 +164,19 @@ export class SqliteLedger implements Ledger {
     if (version === 0) {
       this.db.exec(schema);
       this.db.exec(`PRAGMA user_version = ${SQLITE_SCHEMA_VERSION}`);
-    } else if (version === 1) {
-      this.#migrateV1();
-    } else if (version === 2) {
-      this.#migrateV2();
-    } else if (version === 3) {
-      this.#migrateV3();
-    } else if (version === 4) {
-      this.#migrateV4();
+    } else if (version < SQLITE_SCHEMA_VERSION) {
+      this.#migrateLegacy();
     } else {
       this.db.exec(schema);
     }
   }
 
   close(): void { this.db.close(); }
-  appendEvent(input: Omit<EventRecord, "seq">): EventRecord { return this.#transaction(() => this.#insertEvent(input)); }
+  appendEvent(input: EventInput): EventRecord { return this.#transaction(() => this.#insertEvent(input)); }
+  appendEvents(inputs: EventInput[]): EventRecord[] { return this.#transaction(() => inputs.map((input) => this.#insertEvent(input))); }
+  readStream(streamId: string, fromStreamSeq = 1): EventRecord[] {
+    return (this.db.prepare("SELECT * FROM events WHERE stream_id=? AND stream_seq>=? ORDER BY stream_seq").all(streamId, fromStreamSeq) as Row[]).map(mapEvent);
+  }
 
   putGoal(goal: GoalSnapshot, actor: string, wakeId?: string): EventRecord {
     assertGoalSnapshot(goal);
@@ -187,7 +189,7 @@ export class SqliteLedger implements Ledger {
       if (goal.revision !== 0) throw new Error("new goal revision must be 0");
       this.#assertGoalAuthority(goal.parentId, actor);
     }
-    return this.#project("goals", goal, actor, "goal.put", wakeId);
+    return this.#project("goals", goal, actor, "goal.put", wakeId, undefined, goalStream(goal.id));
   }
 
   putSchedule(value: ScheduleSnapshot, actor: string, wakeId?: string): EventRecord {
@@ -202,7 +204,7 @@ export class SqliteLedger implements Ledger {
     }
     const duplicate = this.wakeByTrigger(input.agent, input.triggerRef);
     if (duplicate) {
-      const row = this.db.prepare("SELECT * FROM events WHERE kind='wake.enqueued' AND json_extract(data, '$.snapshot.id')=? ORDER BY seq DESC LIMIT 1").get(duplicate.id) as Row | undefined;
+      const row = this.db.prepare("SELECT * FROM events WHERE type='wake.enqueued' AND json_extract(data, '$.snapshot.id')=? ORDER BY seq DESC LIMIT 1").get(duplicate.id) as Row | undefined;
       if (!row) throw new Error("wake projection has no source event");
       return { event: mapEvent(row), created: false };
     }
@@ -275,10 +277,10 @@ export class SqliteLedger implements Ledger {
     return next;
   }
 
-  appendRunnerEvent(input: Omit<EventRecord, "seq">, leaseToken: string): EventRecord {
+  appendRunnerEvent(input: EventInput, leaseToken: string): EventRecord {
     return this.#transaction(() => {
-      if (!input.wakeId) throw new Error("runner event requires wakeId");
-      const wake = this.#requiredWake(input.wakeId);
+      if (!input.streamId.startsWith("wake:")) throw new Error("runner event requires a wake stream");
+      const wake = this.#requiredWake(input.streamId.slice("wake:".length));
       this.#assertLease(wake, leaseToken);
       if (wake.status !== "running" || !wake.leaseUntil || input.ts > wake.leaseUntil) throw new Error("stale runner event rejected");
       return this.#insertEvent(input);
@@ -343,7 +345,7 @@ export class SqliteLedger implements Ledger {
     return this.#transaction(() => {
       const wake = this.#requiredWake(commit.wakeId);
       if (wake.status !== "running" || wake.agent !== commit.agent) throw new Error("handoff does not match a running wake");
-      const event = this.#insertEvent({ ts: commit.ts, agent: commit.agent, kind: "handoff.recorded", data: commit.output.handoff as unknown as JsonValue, wakeId: commit.wakeId });
+      const event = this.#insertEvent({ streamId: wakeStream(commit.wakeId), ts: commit.ts, actor: commit.agent, type: "handoff.recorded", data: commit.output.handoff as unknown as JsonValue });
       for (const mail of this.unreadMail(commit.agent)) {
         this.#recordProjection("mailbox", { ...mail, readAt: commit.ts }, "supervisor", "mail.read", commit.wakeId, commit.ts);
       }
@@ -362,14 +364,14 @@ export class SqliteLedger implements Ledger {
   dueSchedules(now: string): ScheduleSnapshot[] { return (this.db.prepare("SELECT * FROM schedule WHERE next_wake_at <= ? ORDER BY next_wake_at,id").all(now) as Row[]).map(mapSchedule); }
   unreadMail(agent: string): MailSnapshot[] { return (this.db.prepare("SELECT * FROM mailbox WHERE to_agent=? AND read_at IS NULL ORDER BY rowid").all(agent) as Row[]).map(mapMail); }
   unackedAuditAdvice(agent: string): ActionSnapshot[] { return (this.db.prepare("SELECT * FROM actions WHERE agent=? AND audit_advice IS NOT NULL AND advice_acked=0 ORDER BY rowid").all(agent) as Row[]).map(mapAction); }
-  lastEvent(agent: string, kind: string): EventRecord | null { const row = this.db.prepare("SELECT * FROM events WHERE agent=? AND kind=? ORDER BY seq DESC LIMIT 1").get(agent, kind) as Row | undefined; return row ? mapEvent(row) : null; }
-  eventsForWake(wakeId: string): EventRecord[] { return (this.db.prepare("SELECT * FROM events WHERE wake_id=? ORDER BY seq").all(wakeId) as Row[]).map(mapEvent); }
+  lastEvent(actor: string, type: string): EventRecord | null { const row = this.db.prepare("SELECT * FROM events WHERE actor=? AND type=? ORDER BY seq DESC LIMIT 1").get(actor, type) as Row | undefined; return row ? mapEvent(row) : null; }
+  eventsForWake(wakeId: string): EventRecord[] { return this.readStream(wakeStream(wakeId)); }
   wake(id: string): WakeSnapshot | null { const row = this.db.prepare("SELECT * FROM wakes WHERE id=?").get(id) as Row | undefined; return row ? mapWake(row) : null; }
   wakeByTrigger(agent: string, triggerRef: string): WakeSnapshot | null {
     const direct = this.db.prepare("SELECT * FROM wakes WHERE agent=? AND trigger_ref=?").get(agent, triggerRef) as Row | undefined;
     if (direct) return mapWake(direct);
-    const coalesced = this.db.prepare(`SELECT w.* FROM events e JOIN wakes w ON w.id=e.wake_id
-      WHERE e.kind='wake.trigger_coalesced' AND json_extract(e.data,'$.triggerRef')=? AND w.agent=? LIMIT 1`).get(triggerRef, agent) as Row | undefined;
+    const coalesced = this.db.prepare(`SELECT w.* FROM events e JOIN wakes w ON e.stream_id='wake:'||w.id
+      WHERE e.type='wake.trigger_coalesced' AND json_extract(e.data,'$.triggerRef')=? AND w.agent=? LIMIT 1`).get(triggerRef, agent) as Row | undefined;
     return coalesced ? mapWake(coalesced) : null;
   }
   queuedWakeForAgent(agent: string): WakeSnapshot | null { const row = this.db.prepare("SELECT * FROM wakes WHERE agent=? AND status='queued' ORDER BY enqueued_seq LIMIT 1").get(agent) as Row | undefined; return row ? mapWake(row) : null; }
@@ -377,15 +379,15 @@ export class SqliteLedger implements Ledger {
   goalsForOwner(owner: string): GoalSnapshot[] { return (this.db.prepare("SELECT * FROM goals WHERE owner=? ORDER BY id").all(owner) as Row[]).map(mapGoal); }
   goal(id: string): GoalSnapshot | null { return this.#getGoal(id); }
   triggeringMail(): MailSnapshot[] { return (this.db.prepare("SELECT * FROM mailbox WHERE read_at IS NULL AND level IN ('decision','emergency') ORDER BY rowid").all() as Row[]).map(mapMail); }
-  eventsSince(seq: number, kinds?: string[]): EventRecord[] {
+  eventsSince(seq: number, types?: string[]): EventRecord[] {
     const events = (this.db.prepare("SELECT * FROM events WHERE seq>? ORDER BY seq").all(seq) as Row[]).map(mapEvent);
-    return kinds?.length ? events.filter((event) => kinds.includes(event.kind)) : events;
+    return types?.length ? events.filter((event) => types.includes(event.type)) : events;
   }
   searchEvents(query: string, limit = 50): EventRecord[] {
     return (this.db.prepare("SELECT e.* FROM events_fts f JOIN events e ON e.seq=f.rowid WHERE events_fts MATCH ? ORDER BY rank LIMIT ?").all(query, limit) as Row[]).map(mapEvent);
   }
   metricSamples(goalId: string): MetricSample[] {
-    return (this.db.prepare("SELECT data FROM events WHERE kind='metric.sampled' AND json_extract(data,'$.goalId')=? ORDER BY seq").all(goalId) as Array<{ data: string }>).map((row) => JSON.parse(row.data) as MetricSample);
+    return (this.db.prepare("SELECT data FROM events WHERE type='metric.sampled' AND json_extract(data,'$.goalId')=? ORDER BY seq").all(goalId) as Array<{ data: string }>).map((row) => JSON.parse(row.data) as MetricSample);
   }
   events(): EventRecord[] { return (this.db.prepare("SELECT * FROM events ORDER BY seq").all() as Row[]).map(mapEvent); }
   goals(): GoalSnapshot[] { return (this.db.prepare("SELECT * FROM goals ORDER BY id").all() as Row[]).map(mapGoal); }
@@ -411,7 +413,7 @@ export class SqliteLedger implements Ledger {
     return this.#transaction(() => {
       const current = this.#requiredAction(id);
       assertActionTransition(current.status, status);
-      this.#insertEvent({ ts: this.#now(), agent: approver, kind: `action.${status}_decision`, data: { actionId: id, reason, evidence }, wakeId: null });
+      this.#insertEvent({ streamId: controlStream("actions"), ts: this.#now(), actor: approver, type: `action.${status}_decision`, data: { actionId: id, reason, evidence } });
       const next = { ...current, status };
       this.#recordProjection("actions", next, approver, `action.${status}`);
       return next;
@@ -437,20 +439,24 @@ export class SqliteLedger implements Ledger {
   #getGoal(id: string): GoalSnapshot | null { const row = this.db.prepare("SELECT * FROM goals WHERE id=?").get(id) as Row | undefined; return row ? mapGoal(row) : null; }
   #requiredWake(id: string): WakeSnapshot { const value = this.wake(id); if (!value) throw new Error(`wake not found: ${id}`); return value; }
   #requiredAction(id: string): ActionSnapshot { const value = this.action(id); if (!value) throw new Error(`action not found: ${id}`); return value; }
-  #project(projection: ProjectionName, snapshot: unknown, agent: string, kind: string, wakeId?: string, ts?: string): EventRecord { return this.#transaction(() => this.#recordProjection(projection, snapshot, agent, kind, wakeId, ts)); }
+  #project(projection: ProjectionName, snapshot: unknown, actor: string, type: string, wakeId?: string, ts?: string, streamId?: string): EventRecord {
+    return this.#transaction(() => this.#recordProjection(projection, snapshot, actor, type, wakeId, ts, undefined, streamId));
+  }
 
-  #recordProjection(projection: ProjectionName, snapshot: unknown, agent: string, kind: string, wakeId?: string, ts?: string, expectedSeq?: number): EventRecord {
-    const event = this.#insertEvent({ ts: ts ?? this.#now(), agent, kind, data: { projection, snapshot } as unknown as JsonValue, wakeId: wakeId ?? null }, expectedSeq);
+  #recordProjection(projection: ProjectionName, snapshot: unknown, actor: string, type: string, wakeId?: string, ts?: string, expectedSeq?: number, streamId?: string): EventRecord {
+    const event = this.#insertEvent({ streamId: streamId ?? (wakeId ? wakeStream(wakeId) : controlStream(projection)), ts: ts ?? this.#now(), actor, type, data: { projection, snapshot } as unknown as JsonValue }, expectedSeq);
     this.#faultInjector?.("after_event_before_projection");
     this.#applyProjection(projection, snapshot, event.seq);
     return event;
   }
 
-  #insertEvent(input: Omit<EventRecord, "seq">, expectedSeq?: number): EventRecord {
+  #insertEvent(input: EventInput, expectedSeq?: number): EventRecord {
+    if (!input.streamId.trim() || !input.actor.trim() || !input.type.trim()) throw new Error("event streamId, actor and type are required");
+    const streamSeq = Number((this.db.prepare("SELECT COALESCE(MAX(stream_seq),0)+1 AS next FROM events WHERE stream_id=?").get(input.streamId) as { next: number }).next);
     const result = expectedSeq === undefined
-      ? this.db.prepare("INSERT INTO events(ts,agent,kind,data,wake_id) VALUES (?,?,?,json(?),?)").run(input.ts, input.agent, input.kind, JSON.stringify(input.data), input.wakeId)
-      : this.db.prepare("INSERT INTO events(seq,ts,agent,kind,data,wake_id) VALUES (?,?,?,?,json(?),?)").run(expectedSeq, input.ts, input.agent, input.kind, JSON.stringify(input.data), input.wakeId);
-    return { ...input, seq: Number(result.lastInsertRowid) };
+      ? this.db.prepare("INSERT INTO events(stream_id,stream_seq,ts,actor,type,data) VALUES (?,?,?,?,?,json(?))").run(input.streamId, streamSeq, input.ts, input.actor, input.type, JSON.stringify(input.data))
+      : this.db.prepare("INSERT INTO events(seq,stream_id,stream_seq,ts,actor,type,data) VALUES (?,?,?,?,?,?,json(?))").run(expectedSeq, input.streamId, streamSeq, input.ts, input.actor, input.type, JSON.stringify(input.data));
+    return { ...input, seq: Number(result.lastInsertRowid), streamSeq };
   }
 
   #nextEventSeq(): number {
@@ -461,7 +467,7 @@ export class SqliteLedger implements Ledger {
   #applyProjection(projection: ProjectionName, raw: unknown, sourceSeq: number): void {
     if (projection === "goals") {
       const v = raw as GoalSnapshot;
-      this.db.prepare(`INSERT INTO goals VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET parent_id=excluded.parent_id,objective=excluded.objective,metric=excluded.metric,target=excluded.target,owner=excluded.owner,phase=excluded.phase,revision=excluded.revision`).run(v.id,v.parentId,v.objective,JSON.stringify(v.metric),JSON.stringify(v.target),v.owner,v.phase,v.revision);
+      this.db.prepare(`INSERT INTO goals VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET parent_id=excluded.parent_id,objective=excluded.objective,owner=excluded.owner,phase=excluded.phase,revision=excluded.revision`).run(v.id,v.parentId,v.objective,v.owner,v.phase,v.revision);
     } else if (projection === "schedule") {
       const v = raw as ScheduleSnapshot;
       this.db.prepare(`INSERT INTO schedule VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET agent=excluded.agent,next_wake_at=excluded.next_wake_at,reason=excluded.reason,set_by=excluded.set_by`).run(v.id,v.agent,v.nextWakeAt,v.reason,v.setBy);
@@ -486,45 +492,56 @@ export class SqliteLedger implements Ledger {
     }
   }
 
-  #migrateV1(): void {
+  #migrateLegacy(): void {
     this.#transaction(() => {
-      this.#dropLegacyGoalBudget("v1");
-      this.db.exec(`DROP INDEX IF EXISTS wakes_one_active_agent; DROP TRIGGER IF EXISTS wakes_valid_transition; ALTER TABLE wakes RENAME TO wakes_v1; ${createWakes}
-        INSERT INTO wakes SELECT id,agent,trigger_ref,status,lease_until,attempt,started_at,ended_at,
-          COALESCE((SELECT MIN(seq) FROM events WHERE kind='wake.enqueued' AND json_extract(data,'$.snapshot.id')=wakes_v1.id),rowid),
-          CASE WHEN status IN ('leased','running') THEN 'legacy:'||id||':'||attempt ELSE NULL END,NULL FROM wakes_v1;
-        DROP TABLE wakes_v1;
-        DROP TRIGGER IF EXISTS actions_valid_transition; ALTER TABLE actions RENAME TO actions_v1; ${createActions}
-        INSERT INTO actions SELECT id,agent,kind,'legacy',payload,reason,evidence,gated,status,reconciled_at,external_ref,audit_advice,advice_acked FROM actions_v1;
-        DROP TABLE actions_v1; ${indexesAndTriggers} INSERT INTO events_fts(events_fts) VALUES('rebuild'); PRAGMA user_version=${SQLITE_SCHEMA_VERSION};`);
-    });
-  }
+      this.db.exec(`PRAGMA defer_foreign_keys=ON;
+        DROP TRIGGER IF EXISTS events_no_update; DROP TRIGGER IF EXISTS events_no_delete; DROP TRIGGER IF EXISTS events_fts_insert;
+        DROP TRIGGER IF EXISTS wakes_valid_transition; DROP TRIGGER IF EXISTS actions_valid_transition;
+        DROP INDEX IF EXISTS events_agent_kind_seq; DROP INDEX IF EXISTS events_wake_seq; DROP INDEX IF EXISTS events_coalesced_trigger;
+        DROP INDEX IF EXISTS events_actor_type_seq; DROP INDEX IF EXISTS events_stream_seq;
+        DROP INDEX IF EXISTS wakes_one_active_agent; DROP INDEX IF EXISTS wakes_queue_order; DROP INDEX IF EXISTS schedule_due; DROP INDEX IF EXISTS actions_agent_status;
+        DROP TABLE IF EXISTS events_fts;
 
-  #migrateV2(): void {
-    this.#transaction(() => {
-      this.#dropLegacyGoalBudget("v2");
+        ALTER TABLE goals RENAME TO goals_legacy; ${createGoals}
+        INSERT INTO goals(id,parent_id,objective,owner,phase,revision) SELECT id,parent_id,objective,owner,phase,revision FROM goals_legacy;
+        DROP TABLE goals_legacy;`);
+
+      const wakeColumns = new Set((this.db.prepare("PRAGMA table_info(wakes)").all() as Array<{ name: string }>).map((row) => row.name));
+      if (!wakeColumns.has("enqueued_seq")) {
+        this.db.exec(`ALTER TABLE wakes RENAME TO wakes_legacy; ${createWakes}
+          INSERT INTO wakes SELECT id,agent,trigger_ref,status,lease_until,attempt,started_at,ended_at,rowid,
+            CASE WHEN status IN ('leased','running') THEN 'legacy:'||id||':'||attempt ELSE NULL END,NULL FROM wakes_legacy;
+          DROP TABLE wakes_legacy;`);
+      }
+
+      const actionColumns = new Set((this.db.prepare("PRAGMA table_info(actions)").all() as Array<{ name: string }>).map((row) => row.name));
+      if (!actionColumns.has("connector")) {
+        this.db.exec(`ALTER TABLE actions RENAME TO actions_legacy; ${createActions}
+          INSERT INTO actions SELECT id,agent,kind,'legacy',payload,reason,evidence,gated,status,reconciled_at,external_ref,audit_advice,advice_acked FROM actions_legacy;
+          DROP TABLE actions_legacy;`);
+      }
+
+      const eventColumns = new Set((this.db.prepare("PRAGMA table_info(events)").all() as Array<{ name: string }>).map((row) => row.name));
+      if (!eventColumns.has("stream_id")) {
+        this.db.exec(`ALTER TABLE events RENAME TO events_legacy;
+          CREATE TABLE events (
+            seq INTEGER PRIMARY KEY AUTOINCREMENT,
+            stream_id TEXT NOT NULL,
+            stream_seq INTEGER NOT NULL CHECK(stream_seq > 0),
+            ts TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            type TEXT NOT NULL,
+            data TEXT NOT NULL CHECK(json_valid(data)),
+            UNIQUE(stream_id, stream_seq)
+          ) STRICT;
+          INSERT INTO events(seq,stream_id,stream_seq,ts,actor,type,data)
+          SELECT seq,stream_id,ROW_NUMBER() OVER (PARTITION BY stream_id ORDER BY seq),ts,agent,kind,data FROM (
+            SELECT seq,ts,agent,kind,data,CASE WHEN wake_id IS NULL THEN 'control:'||agent ELSE 'wake:'||wake_id END AS stream_id FROM events_legacy
+          );
+          DROP TABLE events_legacy;`);
+      }
       this.db.exec(`${indexesAndTriggers} INSERT INTO events_fts(events_fts) VALUES('rebuild'); PRAGMA user_version=${SQLITE_SCHEMA_VERSION};`);
     });
-  }
-
-  #migrateV3(): void {
-    this.#transaction(() => {
-      this.#dropLegacyGoalBudget("v3");
-      this.db.exec(`CREATE INDEX IF NOT EXISTS events_coalesced_trigger ON events(json_extract(data,'$.triggerRef'), wake_id) WHERE kind='wake.trigger_coalesced'; PRAGMA user_version=${SQLITE_SCHEMA_VERSION};`);
-    });
-  }
-
-  #migrateV4(): void {
-    this.#transaction(() => {
-      this.#dropLegacyGoalBudget("v4");
-      this.db.exec(`${indexesAndTriggers} PRAGMA user_version=${SQLITE_SCHEMA_VERSION};`);
-    });
-  }
-
-  #dropLegacyGoalBudget(suffix: string): void {
-    if (!/^[a-z0-9_]+$/.test(suffix)) throw new Error("invalid migration suffix");
-    this.db.exec(`PRAGMA defer_foreign_keys=ON; DROP INDEX IF EXISTS goals_one_active_budget_owner; ALTER TABLE goals RENAME TO goals_${suffix}; ${createGoals}
-      INSERT INTO goals SELECT id,parent_id,objective,metric,target,owner,phase,revision FROM goals_${suffix}; DROP TABLE goals_${suffix};`);
   }
 
   #transaction<T>(fn: () => T): T {
@@ -535,8 +552,8 @@ export class SqliteLedger implements Ledger {
   #now(): string { return this.#clock.now().toISOString(); }
 }
 
-function mapEvent(r: Row): EventRecord { return {seq:Number(r.seq),ts:String(r.ts),agent:String(r.agent),kind:String(r.kind),data:JSON.parse(String(r.data)) as JsonValue,wakeId:r.wake_id===null?null:String(r.wake_id)}; }
-function mapGoal(r: Row): GoalSnapshot { return {id:String(r.id),parentId:r.parent_id===null?null:String(r.parent_id),objective:String(r.objective),metric:JSON.parse(String(r.metric)),target:JSON.parse(String(r.target)),owner:String(r.owner),phase:String(r.phase),revision:Number(r.revision)} as GoalSnapshot; }
+function mapEvent(r: Row): EventRecord { return { seq: Number(r.seq), streamId: String(r.stream_id), streamSeq: Number(r.stream_seq), ts: String(r.ts), actor: String(r.actor), type: String(r.type), data: JSON.parse(String(r.data)) as JsonValue }; }
+function mapGoal(r: Row): GoalSnapshot { return { id: String(r.id), parentId: r.parent_id === null ? null : String(r.parent_id), objective: String(r.objective), owner: String(r.owner), phase: String(r.phase), revision: Number(r.revision) }; }
 function mapSchedule(r: Row): ScheduleSnapshot { return {id:String(r.id),agent:String(r.agent),nextWakeAt:String(r.next_wake_at),reason:String(r.reason),setBy:String(r.set_by)}; }
 function mapWake(r: Row): WakeSnapshot { return {id:String(r.id),agent:String(r.agent),triggerRef:String(r.trigger_ref),status:String(r.status) as WakeSnapshot["status"],leaseUntil:r.lease_until===null?null:String(r.lease_until),attempt:Number(r.attempt),startedAt:r.started_at===null?null:String(r.started_at),endedAt:r.ended_at===null?null:String(r.ended_at),enqueuedSeq:Number(r.enqueued_seq),leaseToken:r.lease_token===null?null:String(r.lease_token),runnerPid:r.runner_pid===null?null:Number(r.runner_pid)}; }
 function mapMail(r: Row): MailSnapshot { return {id:String(r.id),to:String(r.to_agent),from:String(r.from_agent),level:String(r.level) as MailSnapshot["level"],body:JSON.parse(String(r.body)),readAt:r.read_at===null?null:String(r.read_at)}; }

@@ -4,7 +4,7 @@ import { runProcessWorker } from "goah-runner-pi";
 import type { JsonValue, RunnerResult, WakeOutput } from "goah-ledger-contract";
 
 interface WorkerStep {
-  trace?: Array<{ kind: string; data: JsonValue }>;
+  trace?: Array<{ type: string; data: JsonValue }>;
   write?: { path: string; content: string };
   handoff?: WakeOutput;
   crash?: string;
@@ -23,7 +23,7 @@ await runProcessWorker(async (request, emit, rpc): Promise<RunnerResult> => {
       writeFileSync(path, step.write.content);
     }
     for (const trace of step.trace ?? []) emit(trace);
-    if (step.rpc) emit({ kind: "rpc.result", data: await rpc(step.rpc.method, step.rpc.params) });
+    if (step.rpc) emit({ type: "runner.rpc.result", data: await rpc(step.rpc.method, step.rpc.params) });
     if (step.crash) throw new Error(step.crash);
     if (step.delayMs) await new Promise((resolve) => setTimeout(resolve, step.delayMs));
     if (step.hang) await new Promise(() => undefined);

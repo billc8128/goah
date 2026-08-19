@@ -4,10 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import type { ActionSnapshot, Clock, GoalSnapshot, WakeSnapshot } from "goah-ledger-contract";
+import { controlStream, wakeStream, type ActionSnapshot, type Clock, type EventInput, type GoalSnapshot, type JsonValue, type WakeSnapshot } from "goah-ledger-contract";
 import { SqliteLedger } from "./index.js";
 
 const metric = { source: "test", window: "1h", direction: "at_least" as const, target: 1, freshnessMs: 60_000, onMissing: "abnormal" as const, onStale: "wake_owner" as const };
+function event(actor: string, type: string, data: JsonValue = {}, wakeId?: string): EventInput { return { streamId: wakeId ? wakeStream(wakeId) : controlStream(actor), ts: "2030-01-01T00:00:00.000Z", actor, type, data }; }
 class FixedClock implements Clock { constructor(readonly value = "2030-01-01T00:00:00.000Z") {} now(): Date { return new Date(this.value); } }
 function wake(id: string, agent = "agent-1"): WakeSnapshot { return { id, agent, triggerRef: `trigger:${id}`, status: "queued", leaseUntil: null, attempt: 0, startedAt: null, endedAt: null, enqueuedSeq: 0, leaseToken: null, runnerPid: null }; }
 function action(id: string, evidence: number[]): ActionSnapshot { return { id, agent: "a", kind: "mock.write", connector: "mock", payload: {}, reason: "evidence supports it", evidence, gated: false, status: "requested", reconciledAt: null, externalRef: null, auditAdvice: null, adviceAcked: false }; }
@@ -20,16 +21,25 @@ test("event and projection roll back together at the injected transaction bounda
   ledger.close();
 });
 
+test("global event order and per-stream order are both monotonic", () => {
+  const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
+  const records = ledger.appendEvents([event("a", "one"), event("b", "other"), event("a", "two")]);
+  assert.deepEqual(records.map((record) => record.seq), [1, 2, 3]);
+  assert.deepEqual(ledger.readStream(controlStream("a")).map((record) => record.streamSeq), [1, 2]);
+  assert.deepEqual(ledger.readStream(controlStream("b")).map((record) => record.streamSeq), [1]);
+  ledger.close();
+});
+
 test("schema has events plus five projections and replay reproduces all of them", () => {
   const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
   const tables = (ledger.db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name IN ('actions','events','goals','mailbox','schedule','wakes') ORDER BY name").all() as Array<{ name: string }>).map(({ name }) => name);
   assert.deepEqual(tables, ["actions", "events", "goals", "mailbox", "schedule", "wakes"]);
-  const root: GoalSnapshot = { id: "root", parentId: null, objective: "keep tests green", metric, target: 1, owner: "agent-1", phase: "active", revision: 0 };
+  const root: GoalSnapshot = { id: "root", parentId: null, objective: "keep tests green", owner: "agent-1", phase: "active", revision: 0 };
   ledger.putGoal(root, "human");
   ledger.putSchedule({ id: "s1", agent: "agent-1", nextWakeAt: "2030-01-01T00:00:00.000Z", reason: "start", setBy: "agent-1" }, "agent-1");
   ledger.enqueueWake(wake("w1"), "supervisor");
   ledger.putMail({ id: "m1", to: "agent-1", from: "human", level: "decision", body: {}, readAt: null }, "human");
-  const evidence = ledger.appendEvent({ ts: "2030-01-01T00:00:00.000Z", agent: "a", kind: "observed", data: {}, wakeId: null });
+  const evidence = ledger.appendEvent(event("a", "observed"));
   ledger.requestAction(action("a1", [evidence.seq]), "a");
   const before = JSON.stringify({ goals: ledger.goals(), schedules: ledger.schedules(), wakes: ledger.wakes(), mailbox: ledger.mailbox(), actions: ledger.actions() });
   ledger.rebuildProjections();
@@ -43,7 +53,7 @@ test("wake queue is FIFO, deduplicated, fenced and safely recovered", () => {
   ledger.enqueueWake(wake("zzz", "a"), "supervisor");
   ledger.enqueueWake(wake("aaa", "b"), "supervisor");
   assert.equal(ledger.enqueueWake({ ...wake("duplicate", "a"), triggerRef: "trigger:zzz" }, "supervisor").created, false);
-  ledger.appendEvent({ ts: "2030-01-01T00:00:00.000Z", agent: "supervisor", kind: "wake.trigger_coalesced", data: { wakeId: "zzz", triggerRef: "trigger:alias" }, wakeId: "zzz" });
+  ledger.appendEvent(event("supervisor", "wake.trigger_coalesced", { wakeId: "zzz", triggerRef: "trigger:alias" }, "zzz"));
   assert.equal(ledger.wakeByTrigger("a", "trigger:alias")?.id, "zzz");
   assert.equal(ledger.enqueueWake({ ...wake("alias", "a"), triggerRef: "trigger:alias" }, "supervisor").created, false);
   const first = ledger.claimNextWake("2030-01-01T00:00:00.000Z", "2030-01-01T00:00:10.000Z", "lease-1");
@@ -51,7 +61,7 @@ test("wake queue is FIFO, deduplicated, fenced and safely recovered", () => {
   ledger.markWakeRunning("zzz", "2030-01-01T00:00:01.000Z", "lease-1");
   ledger.renewWakeLease("zzz", "lease-1", "2030-01-01T00:00:20.000Z", "2030-01-01T00:00:02.000Z");
   assert.equal(ledger.expiredWakes("2030-01-01T00:00:11.000Z").length, 0);
-  assert.throws(() => ledger.appendRunnerEvent({ ts: "2030-01-01T00:00:02.000Z", agent: "a", kind: "trace", data: {}, wakeId: "zzz" }, "stale"), /stale/);
+  assert.throws(() => ledger.appendRunnerEvent({ ...event("a", "trace", {}, "zzz"), ts: "2030-01-01T00:00:02.000Z" }, "stale"), /stale/);
   const expired = ledger.expiredWakes("2030-01-01T00:00:21.000Z");
   assert.equal(expired[0]?.id, "zzz");
   assert.equal(ledger.recoverExpiredWake("zzz", "2030-01-01T00:00:21.000Z").status, "abnormal");
@@ -62,7 +72,7 @@ test("wake queue is FIFO, deduplicated, fenced and safely recovered", () => {
 test("actions require real evidence and support approval plus audit delivery", () => {
   const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
   assert.throws(() => ledger.requestAction(action("bad", [999_999]), "a"), /does not exist/);
-  const evidence = ledger.appendEvent({ ts: "2030-01-01T00:00:00.000Z", agent: "a", kind: "observed", data: {}, wakeId: null });
+  const evidence = ledger.appendEvent(event("a", "observed"));
   ledger.requestAction(action("a1", [evidence.seq]), "a");
   assert.throws(() => ledger.requestAction(action("spoof", [evidence.seq]), "other"), /actor/);
   assert.equal(ledger.approveAction("a1", "human", "approved", [evidence.seq]).status, "approved");
@@ -139,7 +149,7 @@ test("schema v1 is migrated without rewriting event history", () => {
   assert.equal(ledger.wake("w")?.enqueuedSeq, 1);
   assert.match(ledger.wake("w")?.leaseToken ?? "", /^legacy:/);
   assert.equal(ledger.action("a")?.connector, "legacy");
-  assert.equal((ledger.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 5);
+  assert.equal((ledger.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 6);
   assert.equal(ledger.events().length, 2);
   ledger.rebuildProjections();
   assert.equal(ledger.wake("w")?.enqueuedSeq, 1);
@@ -150,14 +160,14 @@ test("schema v1 is migrated without rewriting event history", () => {
 test("schema v2 migration builds the FTS index from existing events", () => {
   const path = join(mkdtempSync(join(tmpdir(), "goah-v2-")), "ledger.sqlite");
   const ledger = new SqliteLedger(path, { clock: new FixedClock() });
-  ledger.appendEvent({ ts: "2030-01-01T00:00:00.000Z", agent: "a", kind: "fact", data: { text: "migrationsearchterm" }, wakeId: null });
+  ledger.appendEvent(event("a", "fact", { text: "migrationsearchterm" }));
   ledger.close();
   const raw = new DatabaseSync(path);
   raw.exec("DROP TRIGGER events_fts_insert; DROP TABLE events_fts; PRAGMA user_version=2");
   raw.close();
   const migrated = new SqliteLedger(path, { clock: new FixedClock() });
   assert.equal(migrated.searchEvents("migrationsearchterm").length, 1);
-  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 5);
+  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 6);
   migrated.close();
 });
 
@@ -165,14 +175,14 @@ test("schema v3 migration indexes coalesced wake triggers", () => {
   const path = join(mkdtempSync(join(tmpdir(), "goah-v3-")), "ledger.sqlite");
   const ledger = new SqliteLedger(path, { clock: new FixedClock() });
   ledger.enqueueWake(wake("w", "a"), "supervisor");
-  ledger.appendEvent({ ts: "2030-01-01T00:00:00.000Z", agent: "supervisor", kind: "wake.trigger_coalesced", data: { wakeId: "w", triggerRef: "metric:g:missing:none" }, wakeId: "w" });
+  ledger.appendEvent(event("supervisor", "wake.trigger_coalesced", { wakeId: "w", triggerRef: "metric:g:missing:none" }, "w"));
   ledger.close();
   const raw = new DatabaseSync(path);
   raw.exec("DROP INDEX events_coalesced_trigger; PRAGMA user_version=3");
   raw.close();
   const migrated = new SqliteLedger(path, { clock: new FixedClock() });
   assert.equal(migrated.wakeByTrigger("a", "metric:g:missing:none")?.id, "w");
-  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 5);
+  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 6);
   migrated.close();
 });
 
@@ -190,23 +200,23 @@ test("schema v4 migration removes the legacy goal budget column", () => {
   assert.equal("budget" in migrated.goal("legacy")!, false);
   const columns = (migrated.db.prepare("PRAGMA table_info(goals)").all() as Array<{ name: string }>).map((row) => row.name);
   assert.equal(columns.includes("budget"), false);
-  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 5);
+  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 6);
   migrated.close();
 });
 
 test("goal parent cannot be changed during an update", () => {
   const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
-  ledger.putGoal({ id: "p1", parentId: null, objective: "p1", metric, target: 1, owner: "owner", phase: "active", revision: 0 }, "human");
-  ledger.putGoal({ id: "p2", parentId: null, objective: "p2", metric, target: 1, owner: "other", phase: "active", revision: 0 }, "human");
-  ledger.putGoal({ id: "child", parentId: "p1", objective: "c", metric, target: 1, owner: "child", phase: "active", revision: 0 }, "owner");
-  assert.throws(() => ledger.putGoal({ id: "child", parentId: "p2", objective: "c", metric, target: 1, owner: "child", phase: "active", revision: 1 }, "owner"), /reparenting/);
+  ledger.putGoal({ id: "p1", parentId: null, objective: "p1", owner: "owner", phase: "active", revision: 0 }, "human");
+  ledger.putGoal({ id: "p2", parentId: null, objective: "p2", owner: "other", phase: "active", revision: 0 }, "human");
+  ledger.putGoal({ id: "child", parentId: "p1", objective: "c", owner: "child", phase: "active", revision: 0 }, "owner");
+  assert.throws(() => ledger.putGoal({ id: "child", parentId: "p2", objective: "c", owner: "child", phase: "active", revision: 1 }, "owner"), /reparenting/);
   ledger.close();
 });
 
 test("FTS searches event facts and actions keep payload policy external", () => {
   const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
-  ledger.putGoal({ id: "root", parentId: null, objective: "generic policy", metric, target: 1, owner: "a", phase: "active", revision: 0 }, "human");
-  const evidence = ledger.appendEvent({ ts: "2030-01-01T00:00:00.000Z", agent: "a", kind: "observation", data: { note: "uniquenebulafact" }, wakeId: null });
+  ledger.putGoal({ id: "root", parentId: null, objective: "generic policy", owner: "a", phase: "active", revision: 0 }, "human");
+  const evidence = ledger.appendEvent(event("a", "observation", { note: "uniquenebulafact" }));
   assert.equal(ledger.searchEvents("uniquenebulafact").map((event) => event.seq).includes(evidence.seq), true);
   ledger.requestAction({ ...action("generic", [evidence.seq]), payload: { domainSpecificPolicy: { quota: 60 } } }, "a");
   assert.equal(ledger.approveAction("generic", "human", "policy is handled outside the ledger", [evidence.seq]).status, "approved");
@@ -244,7 +254,7 @@ test("fault injection rolls back every action, audit, and approval transition", 
   for (const target of targets) {
     let armed = false;
     const ledger = new SqliteLedger(":memory:", { clock: new FixedClock(), faultInjector: () => { if (armed) throw new Error(`kill at ${target}`); } });
-    const evidence = ledger.appendEvent({ ts: "2030-01-01T00:00:00.000Z", agent: "a", kind: "observed", data: {}, wakeId: null });
+    const evidence = ledger.appendEvent(event("a", "observed"));
     if (target !== "request") ledger.requestAction(action("a", [evidence.seq]), "a");
     if (["dispatch", "dispatchFailed", "confirm", "unknown", "retry", "reconcileConfirmed", "reconcileFailed"].includes(target)) ledger.approveAction("a", "human", "ok", [evidence.seq]);
     if (["dispatchFailed", "confirm", "unknown", "retry", "reconcileConfirmed", "reconcileFailed"].includes(target)) ledger.transitionAction("a", "dispatching");

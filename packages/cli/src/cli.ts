@@ -61,8 +61,7 @@ async function main(): Promise<void> {
     } else if (command === "goal-list") console.log(JSON.stringify(ledger.goals(), null, 2));
     else if (command === "goal-create") {
       const id = required("--id"); const owner = required("--owner"); const objective = required("--objective");
-      const target = Number(option("--target") ?? 1);
-      const goal = { id, parentId: option("--parent"), objective, owner, phase: "active" as const, revision: 0, target, metric: { source: option("--metric-source") ?? id, window: option("--window") ?? "latest", direction: "at_least" as const, target, freshnessMs: Number(option("--freshness-ms") ?? 86_400_000), onMissing: "wake_owner" as const, onStale: "wake_owner" as const } };
+      const goal = { id, parentId: option("--parent"), objective, owner, phase: "active" as const, revision: 0 };
       supervisor.createGoal(goal, option("--actor") ?? "human");
       const wake = flag("--wake-now") ? supervisor.planWake(owner, new Date().toISOString(), `goal:${id}`, "supervisor") : null;
       console.log(JSON.stringify({ goal, wake }, null, 2));
