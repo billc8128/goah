@@ -59,12 +59,6 @@ export interface MetricEvaluation {
   value: number | null;
 }
 
-export interface BudgetContract {
-  currency: string;
-  limit: number;
-  window: "goal" | "day" | "month";
-}
-
 export interface GoalSnapshot {
   id: string;
   parentId: string | null;
@@ -72,7 +66,6 @@ export interface GoalSnapshot {
   metric: MetricContract;
   target: JsonValue;
   owner: string;
-  budget: BudgetContract | null;
   phase: string;
   revision: number;
 }
@@ -166,7 +159,6 @@ export interface RunnerTraceEvent {
 export type AgentRole = "child" | "ceo" | "verifier" | "audit";
 export type AgentCapability =
   | "ledger.search"
-  | "budget.read"
   | "mail.send"
   | "schedule.set"
   | "action.submit"
@@ -216,12 +208,7 @@ export interface ConnectorCapability {
   nativeIdempotency: boolean;
   query: "by_idempotency_key" | "by_external_ref" | "none";
   automaticRetry: boolean;
-  risk: "reversible" | "money" | "irreversible";
-  constraints: {
-    allowedAccounts?: string[];
-    allowedEnvironments?: string[];
-    maxAmount?: number;
-  };
+  risk: "reversible" | "gated" | "irreversible";
 }
 
 export interface ConnectorManifest {
@@ -254,14 +241,6 @@ export interface MetricProcessSpec {
   args: string[];
   env?: Record<string, string>;
   timeoutMs?: number;
-}
-
-export interface BudgetExposure {
-  currency: string;
-  limit: number;
-  reserved: number;
-  actual: number;
-  available: number;
 }
 
 export interface HandoffCommit {
@@ -308,7 +287,6 @@ export interface Ledger {
   triggeringMail(): MailSnapshot[];
   eventsSince(seq: number, kinds?: string[]): EventRecord[];
   searchEvents(query: string, limit?: number): EventRecord[];
-  budgetExposure(agent: string, at: string): BudgetExposure | null;
   metricSamples(goalId: string): MetricSample[];
   events(): EventRecord[];
   goals(): GoalSnapshot[];

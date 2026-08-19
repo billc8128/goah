@@ -11,7 +11,7 @@ import { assertLedgerConformance, createMemoryLedger, fauxRunnerWorkerPath, Mock
 
 const metric = { source: "test", window: "1h", direction: "at_least" as const, target: 1, freshnessMs: 60_000, onMissing: "abnormal" as const, onStale: "wake_owner" as const };
 function queuedWake(id: string, agent = "worker", triggerRef = `trigger:${id}`): WakeSnapshot { return { id, agent, triggerRef, status: "queued", leaseUntil: null, attempt: 0, startedAt: null, endedAt: null, enqueuedSeq: 0, leaseToken: null, runnerPid: null }; }
-function goal(): GoalSnapshot { return { id: "root", parentId: null, objective: "produce a checked artifact", metric, target: 1, owner: "worker", budget: null, phase: "active", revision: 0 }; }
+function goal(): GoalSnapshot { return { id: "root", parentId: null, objective: "produce a checked artifact", metric, target: 1, owner: "worker", phase: "active", revision: 0 }; }
 function repository(): string {
   const path = mkdtempSync(join(tmpdir(), "goah-runner-root-"));
   git(path, ["init", "-b", "main"]); git(path, ["config", "user.email", "goah@example.test"]); git(path, ["config", "user.name", "GOAH Test"]);
@@ -143,7 +143,7 @@ test("connector subprocess does not inherit ambient supervisor secrets", async (
     const ledger = createMemoryLedger({ clock });
     const supervisor = new Supervisor(ledger, fauxRunner([]), clock);
     supervisor.registerConnector({
-      manifest: { contractVersion: CONTRACT_VERSION, connector: "isolated", dryRun: true, capabilities: [{ kind: "check.env", nativeIdempotency: true, query: "none", automaticRetry: false, risk: "reversible", constraints: {} }] },
+      manifest: { contractVersion: CONTRACT_VERSION, connector: "isolated", dryRun: true, capabilities: [{ kind: "check.env", nativeIdempotency: true, query: "none", automaticRetry: false, risk: "reversible" }] },
       command: process.execPath,
       args: ["-e", "process.stdin.resume(); process.stdin.on('end',()=>process.stdout.write(JSON.stringify({status:process.env.GOAH_AMBIENT_SECRET_TEST?'failed':'confirmed'})))"],
     });
@@ -210,9 +210,9 @@ test("two agents run concurrently while CEO context and dashboard see the organi
   const ledger = createMemoryLedger({ clock });
   const runner = fauxRunner([{ tokens: 5, delayMs: 50 }, { tokens: 5, handoff: { handoff: { observations: [], results: ["done"], nextSteps: [] }, mail: [], nextWakeAt: null } }]);
   const supervisor = new Supervisor(ledger, runner, clock, { profiles: [{ agent: "ceo", role: "ceo" }, { agent: "a", role: "child" }, { agent: "b", role: "child" }] });
-  ledger.putGoal({ id: "root", parentId: null, objective: "organization", metric, target: 1, owner: "ceo", budget: null, phase: "active", revision: 0 }, "human");
-  ledger.putGoal({ id: "a-goal", parentId: "root", objective: "a", metric, target: 1, owner: "a", budget: null, phase: "active", revision: 0 }, "ceo");
-  ledger.putGoal({ id: "b-goal", parentId: "root", objective: "b", metric, target: 1, owner: "b", budget: null, phase: "active", revision: 0 }, "ceo");
+  ledger.putGoal({ id: "root", parentId: null, objective: "organization", metric, target: 1, owner: "ceo", phase: "active", revision: 0 }, "human");
+  ledger.putGoal({ id: "a-goal", parentId: "root", objective: "a", metric, target: 1, owner: "a", phase: "active", revision: 0 }, "ceo");
+  ledger.putGoal({ id: "b-goal", parentId: "root", objective: "b", metric, target: 1, owner: "b", phase: "active", revision: 0 }, "ceo");
   supervisor.planWake("a", clock.now().toISOString(), "a");
   supervisor.planWake("b", clock.now().toISOString(), "b");
   const completed = await supervisor.runAvailable(2);
@@ -276,7 +276,6 @@ test("bidirectional runner RPC applies child capabilities and rejects parent-onl
   const seed = ledger.appendEvent({ ts: clock.now().toISOString(), agent: "worker", kind: "fact", data: { text: "rpcseed" }, wakeId: null });
   const runner = fauxRunner([
     { tokens: 1, rpc: { method: "ledger.search", params: { query: "rpcseed" } } },
-    { tokens: 1, rpc: { method: "budget.read", params: {} } },
     { tokens: 1, rpc: { method: "mail.send", params: { to: "human", level: "fyi", body: { message: "working" } } } },
     { tokens: 1, rpc: { method: "schedule.set", params: { at: "2026-08-20T00:00:00.000Z", reason: "continue" } } },
     { tokens: 1, rpc: { method: "action.submit", params: { id: "rpc-action", kind: "mock.write", connector: "mock", payload: {}, reason: "seed supports it", evidence: [seed.seq] } } },
@@ -289,7 +288,7 @@ test("bidirectional runner RPC applies child capabilities and rejects parent-onl
   assert.equal(ledger.action("rpc-action")?.status, "confirmed");
   assert.equal(ledger.mailbox().some((mail) => mail.to === "human"), true);
   assert.equal(ledger.schedules()[0]?.nextWakeAt, "2026-08-20T00:00:00.000Z");
-  assert.equal(ledger.events().filter((event) => event.kind.startsWith("rpc.")).length, 5);
+  assert.equal(ledger.events().filter((event) => event.kind.startsWith("rpc.")).length, 4);
 
   const denied = new Supervisor(ledger, fauxRunner([{ tokens: 1, rpc: { method: "goal.put", params: { goal: { ...goal(), revision: 1 } } } }]), clock, { profiles: [{ agent: "worker", role: "child" }] });
   clock.advance(1);
@@ -302,8 +301,8 @@ test("bidirectional runner RPC applies child capabilities and rejects parent-onl
 test("CEO role can create a child goal and receives its dedicated system prompt", async () => {
   const clock = new SimulatedClock();
   const ledger = createMemoryLedger({ clock });
-  const root = { id: "ceo-root", parentId: null, objective: "build organization", metric, target: 1, owner: "ceo", budget: null, phase: "active", revision: 0 } as const;
-  const child = { id: "child", parentId: "ceo-root", objective: "own metric", metric, target: 1, owner: "worker", budget: null, phase: "active", revision: 0 } as const;
+  const root = { id: "ceo-root", parentId: null, objective: "build organization", metric, target: 1, owner: "ceo", phase: "active", revision: 0 } as const;
+  const child = { id: "child", parentId: "ceo-root", objective: "own metric", metric, target: 1, owner: "worker", phase: "active", revision: 0 } as const;
   const contextFile = join(mkdtempSync(join(tmpdir(), "goah-ceo-")), "context.json");
   const supervisor = new Supervisor(ledger, fauxRunner([
     { tokens: 1, rpc: { method: "goal.put", params: { goal: child } } },
@@ -336,7 +335,7 @@ test("post-wake metric verification closes a failing repo-health loop", async ()
   const ledger = createMemoryLedger({ clock });
   const runner = fauxRunner([{ tokens: 2, write: { path: "healthy.txt", content: "ok\n" } }, { tokens: 1, handoff: { handoff: { observations: ["failed first"], results: ["repaired"], nextSteps: [] }, mail: [], nextWakeAt: null } }], undefined, repo);
   const supervisor = new Supervisor(ledger, runner, clock, { verifyMetricsAfterWake: true });
-  supervisor.createGoal({ id: "health", parentId: null, objective: "keep healthy", owner: "worker", target: 1, budget: null, phase: "active", revision: 0, metric: { source: "repo.health", window: "latest", direction: "at_least", target: 1, freshnessMs: 10_000, onMissing: "wake_owner", onStale: "wake_owner" } });
+  supervisor.createGoal({ id: "health", parentId: null, objective: "keep healthy", owner: "worker", target: 1, phase: "active", revision: 0, metric: { source: "repo.health", window: "latest", direction: "at_least", target: 1, freshnessMs: 10_000, onMissing: "wake_owner", onStale: "wake_owner" } });
   supervisor.registerMetricCollector("health", {
     command: process.execPath,
     args: ["-e", "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const r=JSON.parse(s);const fs=require('fs');process.stdout.write(JSON.stringify({goalId:r.goalId,source:'repo.health',observedAt:new Date().toISOString(),value:fs.existsSync(process.env.GOAH_HEALTH_FILE)?1:0}))})"],

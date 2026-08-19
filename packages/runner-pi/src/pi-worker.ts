@@ -182,7 +182,6 @@ function createRpcTools(rpc: WorkerRpc): AgentTool<any>[] {
   });
   return [
     tool("ledger_search", "Search durable ledger facts.", "ledger.search", Type.Object({ query: Type.String(), limit: Type.Optional(Type.Number()) })),
-    tool("budget_status", "Read the current goal budget exposure.", "budget.read", Type.Object({})),
     tool("send_mail", "Send a durable message to another agent or human.", "mail.send", Type.Object({ to: Type.String(), level: Type.Union([Type.Literal("fyi"), Type.Literal("decision"), Type.Literal("emergency")]), body: Type.Any() })),
     tool("schedule_wake", "Schedule this agent's next wake.", "schedule.set", Type.Object({ at: Type.String(), reason: Type.String() })),
     tool("submit_action", "Submit a gated external action with evidence.", "action.submit", Type.Object({ id: Type.String(), kind: Type.String(), connector: Type.String(), payload: Type.Any(), reason: Type.String(), evidence: Type.Array(Type.Number()) })),

@@ -165,8 +165,7 @@ export class Supervisor {
     const connector = this.#connectors.get(connectorName);
     const capability = connector ? capabilityFor(connector.manifest, action.kind) : null;
     const gated = !connector || !capability || capability.risk !== "reversible"
-      || (!connector.manifest.dryRun && !this.#allowExternalActions)
-      || (capability ? !payloadWithinConstraints(action.payload, capability.constraints) : true);
+      || (!connector.manifest.dryRun && !this.#allowExternalActions);
     const requested: ActionSnapshot = { ...action, connector: connectorName, gated, status: "requested", reconciledAt: null, externalRef: null };
     this.ledger.requestAction(requested, action.agent, wakeId);
     if (gated || !connector) return this.#action(action.id);
@@ -304,7 +303,6 @@ export class Supervisor {
     this.ledger.appendRunnerEvent({ ts: this.#now(), agent: wake.agent, kind: `rpc.${method}`, data: params, wakeId: wake.id }, leaseToken);
     const input = asRecord(params);
     if (method === "ledger.search") return this.ledger.searchEvents(String(input.query), Number(input.limit ?? 20)) as unknown as JsonValue;
-    if (method === "budget.read") return (this.ledger.budgetExposure(wake.agent, this.#now()) ?? null) as unknown as JsonValue;
     if (method === "mail.send") {
       const mail = { id: randomUUID(), to: String(input.to), from: wake.agent, level: String(input.level) as "fyi" | "decision" | "emergency", body: (input.body ?? null) as JsonValue, readAt: null };
       this.ledger.putMail(mail, wake.agent, wake.id); return mail as unknown as JsonValue;
@@ -396,13 +394,6 @@ async function terminateChild(child: ChildProcess, graceMs: number): Promise<voi
   if (child.exitCode === null && child.signalCode === null) signalPid(child.pid, "SIGKILL");
 }
 function signalPid(pid: number, signal: NodeJS.Signals): void { try { process.kill(process.platform === "win32" ? pid : -pid, signal); } catch {} }
-function payloadWithinConstraints(payload: JsonValue, constraints: { allowedAccounts?: string[]; allowedEnvironments?: string[]; maxAmount?: number }): boolean {
-  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return Object.keys(constraints).length === 0;
-  if (constraints.allowedAccounts && (typeof payload.account !== "string" || !constraints.allowedAccounts.includes(payload.account))) return false;
-  if (constraints.allowedEnvironments && (typeof payload.environment !== "string" || !constraints.allowedEnvironments.includes(payload.environment))) return false;
-  if (constraints.maxAmount !== undefined && (typeof payload.amount !== "number" || payload.amount > constraints.maxAmount)) return false;
-  return true;
-}
 function minimalEnvironment(explicit: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const name of ["PATH", "TMPDIR", "TMP", "TEMP", "SYSTEMROOT"]) if (process.env[name] !== undefined) env[name] = process.env[name];
@@ -412,10 +403,10 @@ function escapeHtml(value: string): string { return value.replaceAll("&", "&amp;
 function asRecord(value: JsonValue): Record<string, JsonValue> { if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("RPC params must be an object"); return value; }
 function numberArray(value: JsonValue | undefined): number[] { if (!Array.isArray(value) || value.some((item) => typeof item !== "number")) throw new Error("RPC evidence must be a number array"); return value as number[]; }
 function defaultCapabilities(role: AgentRole): AgentCapability[] {
-  if (role === "ceo") return ["ledger.search", "budget.read", "mail.send", "schedule.set", "action.submit", "audit.ack", "goal.put"];
+  if (role === "ceo") return ["ledger.search", "mail.send", "schedule.set", "action.submit", "audit.ack", "goal.put"];
   if (role === "verifier") return ["ledger.search", "mail.send", "audit.write"];
   if (role === "audit") return ["ledger.search", "mail.send", "audit.write"];
-  return ["ledger.search", "budget.read", "mail.send", "schedule.set", "action.submit", "audit.ack"];
+  return ["ledger.search", "mail.send", "schedule.set", "action.submit", "audit.ack"];
 }
 
 export * from "./verification.js";

@@ -6,7 +6,6 @@ import {
   type ActionSnapshot,
   type ActionStatus,
   type AuditAdvice,
-  type BudgetExposure,
   type Clock,
   type EventRecord,
   type GoalSnapshot,
@@ -24,7 +23,18 @@ type FaultPoint = "after_event_before_projection";
 type FaultInjector = (point: FaultPoint) => void;
 type Row = Record<string, unknown>;
 
-export const SQLITE_SCHEMA_VERSION = 4;
+export const SQLITE_SCHEMA_VERSION = 5;
+
+const createGoals = `CREATE TABLE IF NOT EXISTS goals (
+  id TEXT PRIMARY KEY,
+  parent_id TEXT REFERENCES goals(id),
+  objective TEXT NOT NULL,
+  metric TEXT NOT NULL CHECK(json_valid(metric)),
+  target TEXT NOT NULL CHECK(json_valid(target)),
+  owner TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  revision INTEGER NOT NULL CHECK(revision >= 0)
+) STRICT;`;
 
 const createWakes = `CREATE TABLE IF NOT EXISTS wakes (
   id TEXT PRIMARY KEY,
@@ -68,7 +78,6 @@ CREATE INDEX IF NOT EXISTS events_agent_kind_seq ON events(agent, kind, seq DESC
 CREATE INDEX IF NOT EXISTS events_wake_seq ON events(wake_id, seq);
 CREATE INDEX IF NOT EXISTS events_coalesced_trigger ON events(json_extract(data,'$.triggerRef'), wake_id) WHERE kind='wake.trigger_coalesced';
 CREATE INDEX IF NOT EXISTS actions_agent_status ON actions(agent, status);
-CREATE UNIQUE INDEX IF NOT EXISTS goals_one_active_budget_owner ON goals(owner) WHERE budget IS NOT NULL AND phase='active';
 CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(agent, kind, data, content='events', content_rowid='seq');
 
 CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events
@@ -105,17 +114,7 @@ CREATE TABLE IF NOT EXISTS events (
   data TEXT NOT NULL CHECK(json_valid(data)),
   wake_id TEXT
 ) STRICT;
-CREATE TABLE IF NOT EXISTS goals (
-  id TEXT PRIMARY KEY,
-  parent_id TEXT REFERENCES goals(id),
-  objective TEXT NOT NULL,
-  metric TEXT NOT NULL CHECK(json_valid(metric)),
-  target TEXT NOT NULL CHECK(json_valid(target)),
-  owner TEXT NOT NULL,
-  budget TEXT CHECK(budget IS NULL OR json_valid(budget)),
-  phase TEXT NOT NULL,
-  revision INTEGER NOT NULL CHECK(revision >= 0)
-) STRICT;
+${createGoals}
 CREATE TABLE IF NOT EXISTS schedule (
   id TEXT PRIMARY KEY,
   agent TEXT NOT NULL,
@@ -167,6 +166,8 @@ export class SqliteLedger implements Ledger {
       this.#migrateV2();
     } else if (version === 3) {
       this.#migrateV3();
+    } else if (version === 4) {
+      this.#migrateV4();
     } else {
       this.db.exec(schema);
     }
@@ -186,7 +187,6 @@ export class SqliteLedger implements Ledger {
       if (goal.revision !== 0) throw new Error("new goal revision must be 0");
       this.#assertGoalAuthority(goal.parentId, actor);
     }
-    this.#assertBudgetAllocation(goal);
     return this.#project("goals", goal, actor, "goal.put", wakeId);
   }
 
@@ -283,7 +283,6 @@ export class SqliteLedger implements Ledger {
   }
 
   approveAction(id: string, approver: string, reason: string, evidence: number[]): ActionSnapshot {
-    this.#assertBudgetAvailable(this.#requiredAction(id));
     return this.#decideAction(id, "approved", approver, reason, evidence);
   }
 
@@ -375,23 +374,6 @@ export class SqliteLedger implements Ledger {
   searchEvents(query: string, limit = 50): EventRecord[] {
     return (this.db.prepare("SELECT e.* FROM events_fts f JOIN events e ON e.seq=f.rowid WHERE events_fts MATCH ? ORDER BY rank LIMIT ?").all(query, limit) as Row[]).map(mapEvent);
   }
-  budgetExposure(agent: string, at: string): BudgetExposure | null {
-    const goal = this.goalsForOwner(agent).find((item) => item.phase === "active" && item.budget);
-    if (!goal?.budget) return null;
-    const start = budgetWindowStart(goal.budget.window, at);
-    const rows = this.db.prepare(`SELECT a.*, (SELECT ts FROM events e WHERE e.kind='action.requested' AND json_extract(e.data,'$.snapshot.id')=a.id ORDER BY seq LIMIT 1) requested_at FROM actions a WHERE agent=? AND status IN ('approved','dispatching','unknown','confirmed')`).all(agent) as Row[];
-    let reserved = 0;
-    let actual = 0;
-    for (const row of rows) {
-      if (start && String(row.requested_at ?? "") < start) continue;
-      const payload = JSON.parse(String(row.payload)) as Record<string, unknown>;
-      const amount = typeof payload.amount === "number" ? payload.amount : 0;
-      if (amount === 0) continue;
-      if (payload.currency !== goal.budget.currency) throw new Error("action currency does not match goal budget");
-      if (row.status === "confirmed") actual += amount; else reserved += amount;
-    }
-    return { currency: goal.budget.currency, limit: goal.budget.limit, reserved, actual, available: goal.budget.limit - reserved - actual };
-  }
   metricSamples(goalId: string): MetricSample[] {
     return (this.db.prepare("SELECT data FROM events WHERE kind='metric.sampled' AND json_extract(data,'$.goalId')=? ORDER BY seq").all(goalId) as Array<{ data: string }>).map((row) => JSON.parse(row.data) as MetricSample);
   }
@@ -433,24 +415,6 @@ export class SqliteLedger implements Ledger {
     if (parent.owner !== actor) throw new Error("only the parent goal owner may modify a child goal");
   }
 
-  #assertBudgetAllocation(goal: GoalSnapshot): void {
-    if (!goal.budget || !goal.parentId) return;
-    const parent = this.#getGoal(goal.parentId);
-    if (!parent?.budget) throw new Error("budgeted child requires a budgeted parent");
-    if (parent.budget.currency !== goal.budget.currency || parent.budget.window !== goal.budget.window) throw new Error("child budget currency and window must match parent");
-    const row = this.db.prepare("SELECT COALESCE(SUM(json_extract(budget,'$.limit')),0) total FROM goals WHERE parent_id=? AND id<>? AND budget IS NOT NULL").get(goal.parentId, goal.id) as { total: number };
-    if (Number(row.total) + goal.budget.limit > parent.budget.limit) throw new Error("child budgets exceed parent budget");
-  }
-
-  #assertBudgetAvailable(action: ActionSnapshot): void {
-    const exposure = this.budgetExposure(action.agent, this.#now());
-    if (!exposure) return;
-    const payload = action.payload as Record<string, unknown>;
-    if (typeof payload.amount !== "number") return;
-    if (payload.currency !== exposure.currency) throw new Error("action currency does not match goal budget");
-    if (payload.amount > exposure.available) throw new Error("action exceeds available goal budget");
-  }
-
   #assertEvidenceExists(evidence: number[]): void {
     const exists = this.db.prepare("SELECT 1 FROM events WHERE seq=?");
     for (const seq of evidence) if (!Number.isInteger(seq) || seq <= 0 || !exists.get(seq)) throw new Error(`evidence event does not exist: ${seq}`);
@@ -487,7 +451,7 @@ export class SqliteLedger implements Ledger {
   #applyProjection(projection: ProjectionName, raw: unknown, sourceSeq: number): void {
     if (projection === "goals") {
       const v = raw as GoalSnapshot;
-      this.db.prepare(`INSERT INTO goals VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET parent_id=excluded.parent_id,objective=excluded.objective,metric=excluded.metric,target=excluded.target,owner=excluded.owner,budget=excluded.budget,phase=excluded.phase,revision=excluded.revision`).run(v.id,v.parentId,v.objective,JSON.stringify(v.metric),JSON.stringify(v.target),v.owner,v.budget?JSON.stringify(v.budget):null,v.phase,v.revision);
+      this.db.prepare(`INSERT INTO goals VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET parent_id=excluded.parent_id,objective=excluded.objective,metric=excluded.metric,target=excluded.target,owner=excluded.owner,phase=excluded.phase,revision=excluded.revision`).run(v.id,v.parentId,v.objective,JSON.stringify(v.metric),JSON.stringify(v.target),v.owner,v.phase,v.revision);
     } else if (projection === "schedule") {
       const v = raw as ScheduleSnapshot;
       this.db.prepare(`INSERT INTO schedule VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET agent=excluded.agent,next_wake_at=excluded.next_wake_at,reason=excluded.reason,set_by=excluded.set_by`).run(v.id,v.agent,v.nextWakeAt,v.reason,v.setBy);
@@ -514,6 +478,7 @@ export class SqliteLedger implements Ledger {
 
   #migrateV1(): void {
     this.#transaction(() => {
+      this.#dropLegacyGoalBudget("v1");
       this.db.exec(`DROP INDEX IF EXISTS wakes_one_active_agent; DROP TRIGGER IF EXISTS wakes_valid_transition; ALTER TABLE wakes RENAME TO wakes_v1; ${createWakes}
         INSERT INTO wakes SELECT id,agent,trigger_ref,status,lease_until,attempt,started_at,ended_at,
           COALESCE((SELECT MIN(seq) FROM events WHERE kind='wake.enqueued' AND json_extract(data,'$.snapshot.id')=wakes_v1.id),rowid),
@@ -527,14 +492,29 @@ export class SqliteLedger implements Ledger {
 
   #migrateV2(): void {
     this.#transaction(() => {
+      this.#dropLegacyGoalBudget("v2");
       this.db.exec(`${indexesAndTriggers} INSERT INTO events_fts(events_fts) VALUES('rebuild'); PRAGMA user_version=${SQLITE_SCHEMA_VERSION};`);
     });
   }
 
   #migrateV3(): void {
     this.#transaction(() => {
+      this.#dropLegacyGoalBudget("v3");
       this.db.exec(`CREATE INDEX IF NOT EXISTS events_coalesced_trigger ON events(json_extract(data,'$.triggerRef'), wake_id) WHERE kind='wake.trigger_coalesced'; PRAGMA user_version=${SQLITE_SCHEMA_VERSION};`);
     });
+  }
+
+  #migrateV4(): void {
+    this.#transaction(() => {
+      this.#dropLegacyGoalBudget("v4");
+      this.db.exec(`${indexesAndTriggers} PRAGMA user_version=${SQLITE_SCHEMA_VERSION};`);
+    });
+  }
+
+  #dropLegacyGoalBudget(suffix: string): void {
+    if (!/^[a-z0-9_]+$/.test(suffix)) throw new Error("invalid migration suffix");
+    this.db.exec(`PRAGMA defer_foreign_keys=ON; DROP INDEX IF EXISTS goals_one_active_budget_owner; ALTER TABLE goals RENAME TO goals_${suffix}; ${createGoals}
+      INSERT INTO goals SELECT id,parent_id,objective,metric,target,owner,phase,revision FROM goals_${suffix}; DROP TABLE goals_${suffix};`);
   }
 
   #transaction<T>(fn: () => T): T {
@@ -546,15 +526,8 @@ export class SqliteLedger implements Ledger {
 }
 
 function mapEvent(r: Row): EventRecord { return {seq:Number(r.seq),ts:String(r.ts),agent:String(r.agent),kind:String(r.kind),data:JSON.parse(String(r.data)) as JsonValue,wakeId:r.wake_id===null?null:String(r.wake_id)}; }
-function mapGoal(r: Row): GoalSnapshot { return {id:String(r.id),parentId:r.parent_id===null?null:String(r.parent_id),objective:String(r.objective),metric:JSON.parse(String(r.metric)),target:JSON.parse(String(r.target)),owner:String(r.owner),budget:r.budget===null?null:JSON.parse(String(r.budget)),phase:String(r.phase),revision:Number(r.revision)} as GoalSnapshot; }
+function mapGoal(r: Row): GoalSnapshot { return {id:String(r.id),parentId:r.parent_id===null?null:String(r.parent_id),objective:String(r.objective),metric:JSON.parse(String(r.metric)),target:JSON.parse(String(r.target)),owner:String(r.owner),phase:String(r.phase),revision:Number(r.revision)} as GoalSnapshot; }
 function mapSchedule(r: Row): ScheduleSnapshot { return {id:String(r.id),agent:String(r.agent),nextWakeAt:String(r.next_wake_at),reason:String(r.reason),setBy:String(r.set_by)}; }
 function mapWake(r: Row): WakeSnapshot { return {id:String(r.id),agent:String(r.agent),triggerRef:String(r.trigger_ref),status:String(r.status) as WakeSnapshot["status"],leaseUntil:r.lease_until===null?null:String(r.lease_until),attempt:Number(r.attempt),startedAt:r.started_at===null?null:String(r.started_at),endedAt:r.ended_at===null?null:String(r.ended_at),enqueuedSeq:Number(r.enqueued_seq),leaseToken:r.lease_token===null?null:String(r.lease_token),runnerPid:r.runner_pid===null?null:Number(r.runner_pid)}; }
 function mapMail(r: Row): MailSnapshot { return {id:String(r.id),to:String(r.to_agent),from:String(r.from_agent),level:String(r.level) as MailSnapshot["level"],body:JSON.parse(String(r.body)),readAt:r.read_at===null?null:String(r.read_at)}; }
 function mapAction(r: Row): ActionSnapshot { return {id:String(r.id),agent:String(r.agent),kind:String(r.kind),connector:String(r.connector),payload:JSON.parse(String(r.payload)),reason:String(r.reason),evidence:JSON.parse(String(r.evidence)),gated:Boolean(r.gated),status:String(r.status) as ActionStatus,reconciledAt:r.reconciled_at===null?null:String(r.reconciled_at),externalRef:r.external_ref===null?null:String(r.external_ref),auditAdvice:r.audit_advice===null?null:JSON.parse(String(r.audit_advice)),adviceAcked:Boolean(r.advice_acked)}; }
-function budgetWindowStart(window: "goal" | "day" | "month", at: string): string | null {
-  if (window === "goal") return null;
-  const date = new Date(at);
-  if (window === "day") date.setUTCHours(0, 0, 0, 0);
-  else { date.setUTCDate(1); date.setUTCHours(0, 0, 0, 0); }
-  return date.toISOString();
-}

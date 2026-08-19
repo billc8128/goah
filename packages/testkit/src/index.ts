@@ -76,7 +76,7 @@ export class MockConnector {
       contractVersion: CONTRACT_VERSION,
       connector,
       dryRun: true,
-      capabilities: [{ kind, nativeIdempotency: true, query: "by_idempotency_key", automaticRetry: false, risk: "reversible", constraints: {} }],
+      capabilities: [{ kind, nativeIdempotency: true, query: "by_idempotency_key", automaticRetry: false, risk: "reversible" }],
     };
     writeFileSync(this.statePath, JSON.stringify({ dispatched: [], failAfterEffect: false } satisfies MockState));
     this.spec = { manifest: this.manifest, command: process.execPath, args: [mockConnectorWorkerPath()], env: { GOAH_MOCK_CONNECTOR_STATE: this.statePath }, timeoutMs: 2_000 };
@@ -96,7 +96,7 @@ export function assertLedgerConformance(create: LedgerConformanceFactory): void 
   const clock = new SimulatedClock("2030-01-01T00:00:00.000Z");
   const ledger = create(clock);
   const metric = { source: "test", window: "1h", direction: "at_least" as const, target: 1, freshnessMs: 1_000, onMissing: "abnormal" as const, onStale: "wake_owner" as const };
-  ledger.putGoal({ id: "root", parentId: null, objective: "test", metric, target: 1, owner: "a", budget: null, phase: "active", revision: 0 }, "human");
+  ledger.putGoal({ id: "root", parentId: null, objective: "test", metric, target: 1, owner: "a", phase: "active", revision: 0 }, "human");
   const first = ledger.enqueueWake({ id: "z", agent: "a", triggerRef: "first", status: "queued", leaseUntil: null, attempt: 0, startedAt: null, endedAt: null, enqueuedSeq: 0, leaseToken: null, runnerPid: null }, "supervisor");
   ledger.enqueueWake({ id: "a", agent: "b", triggerRef: "second", status: "queued", leaseUntil: null, attempt: 0, startedAt: null, endedAt: null, enqueuedSeq: 0, leaseToken: null, runnerPid: null }, "supervisor");
   const claimed = ledger.claimNextWake(clock.now().toISOString(), "2030-01-01T00:01:00.000Z", "lease");

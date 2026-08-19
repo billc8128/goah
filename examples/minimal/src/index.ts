@@ -29,7 +29,7 @@ const supervisor = new Supervisor(ledger, runner, clock);
 supervisor.createGoal({
   id: "root", parentId: null, objective: "produce one durable artifact",
   metric: { source: "runner", window: "wake", direction: "at_least", target: 1, freshnessMs: 60_000, onMissing: "abnormal", onStale: "wake_owner" },
-  target: 1, owner: "worker", budget: null, phase: "active", revision: 0,
+  target: 1, owner: "worker", phase: "active", revision: 0,
 });
 supervisor.planWake("worker", clock.now().toISOString(), "initial plan");
 const wake = await supervisor.tick();
