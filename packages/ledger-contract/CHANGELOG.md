@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0
+
+- Added textual Goal observation methods, evidence-backed completion, and child Goal revision capabilities.
+
 ## 0.4.0
 
 - Added the closed Goal phase lifecycle and transition assertion.

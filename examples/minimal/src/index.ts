@@ -27,7 +27,7 @@ const runner = new ProcessRunner({
 });
 const supervisor = new Supervisor(ledger, runner, clock);
 supervisor.createGoal({
-  id: "root", parentId: null, objective: "produce one durable artifact",
+  id: "root", parentId: null, objective: "produce one durable artifact", observationMethod: "Confirm the handoff cites the created artifact.",
   owner: "worker", phase: "active", revision: 0,
 });
 supervisor.planWake("worker", clock.now().toISOString(), "initial plan");

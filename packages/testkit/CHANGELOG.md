@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0
+
+- Added schema v8, observation lifecycle, revision barrier, universal Pi tool, and resident-control test coverage.
+
 ## 0.4.0
 
 - Added Goal lifecycle, schema v6→v7, Session upgrader, and unknown-event conformance coverage.

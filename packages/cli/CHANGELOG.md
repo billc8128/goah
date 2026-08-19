@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0
+
+- Added the interactive `goah` CEO shell and resident Supervisor local control socket for live goal revisions and observation confirmation.
+
 ## 0.4.0
 
 - Added `goal-show`, `goal-update`, `goal-pause`, `goal-resume`, and `goal-complete`.

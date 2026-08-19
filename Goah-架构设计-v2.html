@@ -161,7 +161,7 @@ next model request</pre>
 <p>源码保留六个 workspace 的依赖边界，但 npm 只发布一个 <code>@goah/cli</code> tarball。五个内部模块作为 bundled dependencies 随包安装，避免一个逻辑版本产生六次发布。</p>
 <table><thead><tr><th>源码模块</th><th>公共入口</th><th>职责</th></tr></thead><tbody>
 <tr><td><code>ledger-contract</code></td><td><code>@goah/cli/kernel</code> 等</td><td>kernel、Session replay、execution 和 metric 契约</td></tr>
-<tr><td><code>ledger-sqlite</code></td><td><code>@goah/cli/sqlite</code></td><td>SQLite schema v7、迁移、投影表与事务实现</td></tr>
+<tr><td><code>ledger-sqlite</code></td><td><code>@goah/cli/sqlite</code></td><td>SQLite schema v8、迁移、投影表与事务实现</td></tr>
 <tr><td><code>supervisor</code></td><td><code>@goah/cli/supervisor</code></td><td>调度、lease、进程、connector、Active Context</td></tr>
 <tr><td><code>runner-pi</code></td><td><code>@goah/cli/runner-pi</code></td><td>Pi 事件标准化、request snapshot、compaction 与进程协议</td></tr>
 <tr><td><code>testkit</code></td><td><code>@goah/cli/testkit</code></td><td>faux runner、模拟时钟、内存 SQLite、connector 和故障注入</td></tr>
@@ -183,9 +183,9 @@ next model request</pre>
 
 <section>
 <h2>11. 当前完成度与限制</h2>
-<p><span class="tag">IMPLEMENTED IN 0.4</span> stream-aware required/ignorable event schema、v1–v7 SQLite 迁移、Session format v1 与 legacy upgrader、标准 Pi Session events、request snapshot、compaction replacement facts、Session replay、中断 tool unknown、完整 Goal 生命周期、Active Context Markdown、Session Inspector 与默认脱敏导出、可选 metric、现有 wake/action 故障语义。</p>
+<p><span class="tag">IMPLEMENTED IN 0.5</span> stream-aware required/ignorable event schema、v1–v8 SQLite 迁移、Session format v1 与 legacy upgrader、标准 Pi Session events、request snapshot、compaction replacement facts、Session replay、中断 tool unknown、带 textual Observation Method 的完整 Goal 生命周期、Active Context Markdown、Session Inspector 与默认脱敏导出、可选 metric、现有 wake/action 故障语义。</p>
 <p><span class="tag">NEXT</span> 为非 Pi runner 发布 conformance suite；为海量 delta 增加批量 checkpoint 策略；用真实长跑账本继续检验 Active Context 的选择质量。</p>
-<p><span class="tag">IMPLEMENTED</span> CEO 作为唯一用户入口的组织运行层、原子 delegation/reassignment、派生 team roster、默认 Operating Policy、motion 校验与 goal-start 产品入口见 <a href="./Goah-CEO-Agent-Operating-Layer.html">CEO Agent Operating Layer</a>。Milestone A–C 与确定性双 child canary 已实现；真实模型长跑仍属于运营验证。</p>
+<p><span class="tag">IMPLEMENTED</span> CEO 作为唯一用户入口的组织运行层、原子 delegation/reassignment、派生 team roster、默认 Operating Policy、motion/revision 校验、交互式 <code>goah</code> shell、所有 Agent 的 Pi read/write/edit/bash 基础工具，以及持久 textual Goal Observation Method 见 <a href="./Goah-CEO-Agent-Operating-Layer.html">CEO Agent Operating Layer</a>。Milestone A–C、E 与确定性双 child canary 已实现；真实模型长跑仍属于运营验证。</p>
 <p class="note">Goah 保证状态机与证据链的机械一致性，不保证模型判断正确，也不把 prompt injection 防御伪装成账本能力。</p>
 </section>
 </main></body></html>

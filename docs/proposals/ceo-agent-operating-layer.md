@@ -1,12 +1,12 @@
 # Goah CEO Agent Operating Layer
 
-Status: implemented through Milestones A–C; deterministic Milestone D canary  
-Version: 0.2  
-Date: 2026-08-19
+Status: implemented through Milestones A–C and E; deterministic Milestone D canary
+Version: 0.4
+Date: 2026-08-20
 
 Rendered document: [`../../Goah-CEO-Agent-Operating-Layer.html`](../../Goah-CEO-Agent-Operating-Layer.html)
 
-Implementation note: the contracts, atomic SQLite transactions, CEO tool surface and policy, CLI sole-entry flow, derived roster, motion validation, recovery injection, and deterministic two-child canary are implemented. A long-running real-model Milestone D canary remains operational validation rather than an architectural dependency.
+Implementation note: the contracts, atomic SQLite transactions, CEO tool surface and policy, interactive `goah` shell, resident Supervisor control socket, universal Pi coding tools, durable Goal observation methods, derived roster, motion/revision validation, recovery injection, and deterministic two-child canary are implemented for `0.5.0`. A long-running real-model Milestone D canary remains operational validation rather than an architectural dependency.
 
 ## 1. Decision summary
 
@@ -35,6 +35,9 @@ This proposal completes the product promise:
 ### In scope
 
 - One durable CEO identity as the only normal user interaction endpoint.
+- A Codex/Claude Code-like interactive `goah` shell that starts or attaches to CEO in the current directory.
+- The Pi coding baseline (`read`, `write`, `edit`, `bash`) for every CEO and child Agent, independent of organization role.
+- A durable, textual observation method paired with every Goal so progress is evaluated consistently across wakes.
 - Starting a root Goal and waking CEO automatically.
 - Model-judged decomposition and team changes.
 - Atomic delegation: Goal + message + wake, all or nothing.
@@ -51,24 +54,35 @@ This proposal completes the product promise:
 - Long-lived Agent processes.
 - A message queue or separate orchestration service.
 - Framework-owned business metrics, budgets, or Git workspaces.
+- A framework-defined metric schema for every Goal; an observation method may be a script, checklist, query, inspection protocol, or human confirmation.
 - CEO overriding human root-goal authority.
 
 ## 3. Product interaction model
 
 ### 3.1 Normal user surface
 
-The minimum product surface is:
+The normal product entry is an interactive CEO session in the current directory:
+
+```bash
+goah
+goah "Launch a profitable store"
+goah --continue
+```
+
+The shell starts or attaches to the local Supervisor, streams CEO text and tool activity, accepts corrections and approvals, and may exit without stopping background organization work. Re-entering `goah` reconstructs the same CEO from Ledger state rather than provider thread identity.
+
+Lower-level commands remain available for inspection, automation, and recovery:
 
 ```bash
 goah goal start --objective "Launch a profitable store"
-goah ceo send --message "Prioritize low inventory risk"
+goah goal update <root-goal-id> --objective "..."
 goah ceo status
 goah ceo inbox
 goah ceo approve <action-id> --reason "..." --evidence <seqs>
 goah goal complete <root-goal-id>
 ```
 
-Equivalent Web/API surfaces may be added later, but they call the same Supervisor contracts.
+The CLI and a later graphical control panel are clients of the same Supervisor-owned local control connection. They never open SQLite directly. This permits goal revisions and human messages while the resident Supervisor is running without creating another Ledger writer.
 
 Users do not need to know child Agent names, schedules, or wake IDs. Those remain inspectable, not required interaction concepts.
 
@@ -79,6 +93,7 @@ Users do not need to know child Agent names, schedules, or wake IDs. Those remai
 - CEO may create and mutate descendants through parent authority.
 - CEO cannot mark the root complete. It emits a completion recommendation with evidence and asks the human to close it.
 - A human correction becomes a durable CEO message and a root revision when it changes purpose.
+- A material objective revision invalidates the previous observation method until the human reconfirms it; existing children require CEO review before new high-risk work.
 
 ### 3.3 CEO continuity
 
@@ -93,6 +108,21 @@ The user experiences one continuous CEO even though each wake is a new process. 
 - CEO schedule and recovery facts.
 
 Provider thread identity is not the source of continuity.
+
+### 3.4 Universal Agent work surface
+
+Every Agent runs in a local or cloud computer working directory and receives the Pi coding baseline:
+
+| Tool | Purpose |
+|---|---|
+| `read` | Read project files and existing operational material |
+| `write` | Create complete files and artifacts |
+| `edit` | Apply bounded changes without rewriting an entire file |
+| `bash` | Inspect the directory, search, run scripts, tests, and ordinary local CLIs |
+
+These four tools are infrastructure, not role capabilities. CEO and every child receive them. `handoff` and role-scoped Goah RPC tools are layered on top.
+
+Discovery follows the same filesystem-first model as Codex: Agents inspect the current directory, `goah.config.json`, scripts, documentation, and non-secret connector manifests with Bash and file tools. Goah does not add `capability.list`, `connector.list`, or `metric.list` merely to mirror readable project configuration. Ledger queries and protected mutations still use RPC because Agents never receive a database connection or external credentials.
 
 ## 4. Team model without an Agent table
 
@@ -151,9 +181,90 @@ Status is a pure projection:
 
 New owners use the default child profile unless configuration maps the owner to a named profile template. Dynamic arbitrary capability creation is deferred. CEO may choose ownership boundaries; deployment configuration decides which tool/capability templates are available.
 
-## 5. Atomic delegation
+## 5. Goal observation method
 
-### 5.1 Why a high-level primitive is required
+### 5.1 Purpose
+
+An objective says what should become true. Its observation method says how an Agent must inspect reality to decide whether the objective is progressing or complete. Without this durable companion, separately reconstructed Sessions can silently change definitions, data sources, commands, or acceptance criteria.
+
+The method is Markdown text, intentionally not a universal metric object. It behaves like a Goal-specific micro-skill and may describe a query, script, checklist, artifact inspection, external data source, or human confirmation.
+
+```ts
+interface GoalSnapshot {
+  id: string;
+  parentId: string | null;
+  objective: string;
+  observationMethod: string | null;
+  owner: string;
+  phase: GoalPhase;
+  revision: number;
+}
+```
+
+SQLite stores it as nullable `observation_method TEXT`. `null` has one meaning: the Goal has not yet acquired an authoritative observation method.
+
+### 5.2 Root Goal onboarding
+
+A new root starts with `observationMethod = null`. On its first wake CEO must:
+
+1. inspect the current directory, project documentation, scripts, local CLIs, configured connectors, and existing Ledger evidence;
+2. clarify the objective, constraints, current baseline, and meaning of success;
+3. for quantitative or external outcomes, identify the source, calculation, freshness, cadence, time zone, sustain window, and missing-data behavior;
+4. draft a textual observation method and list any required data access or permissions;
+5. ask only for decisions or access that cannot be discovered locally;
+6. continue safe, reversible exploration while waiting when useful;
+7. present the method to the human for confirmation.
+
+The draft remains a durable CEO message/event. CEO cannot authoritatively set the root method. Human confirmation writes the non-null value through root authority, increments Goal revision, and wakes CEO. No separate `confirmed` field is required: a non-null root value can only have been written by human authority.
+
+Exploratory children are permitted before confirmation when their bounded purpose is to discover the root observation method. Those children still require their own non-empty methods.
+
+### 5.3 Child Goal contract
+
+CEO must write a non-empty observation method when delegating a child. Example:
+
+```markdown
+Run `npm test` and `npm run typecheck` from the project root.
+Both commands must exit 0. Cite their tool-result event sequences.
+If either command is unavailable, report the exact missing prerequisite instead of claiming completion.
+```
+
+Objective and observation method form one revisioned pair:
+
+- creating a child requires both;
+- changing a child objective requires a replacement method in the same revision;
+- CEO may revise a child method through parent authority with reason and evidence;
+- every child Active Context includes the exact current text;
+- completion must cite Ledger evidence produced by following the method.
+
+### 5.4 Root revision semantics
+
+A material human revision to the root objective clears its previous observation method by default. CEO receives a high-priority revision wake, reviews all descendants, and proposes a new or explicitly reused method. Children derived from an older root revision may finish their current safe step, but cannot begin a new gated/high-risk action until CEO revalidates their objective/method pair.
+
+This creates a revision barrier without killing useful local work or treating every wording edit as a destructive reset.
+
+### 5.5 Examples
+
+Revenue outcome:
+
+```markdown
+Use paid Shopify orders as the fact source. Net revenue is paid amount minus refunds,
+excluding tax and shipping, grouped by Asia/Shanghai calendar month. Run
+`scripts/revenue-report.ts` every six hours. Report order count, gross, refunds, and net.
+Data older than twelve hours cannot support a progress or completion judgment.
+```
+
+Qualitative artifact:
+
+```markdown
+Inspect the home page at desktop and mobile widths against the approved message checklist.
+Store screenshots and cite them in the handoff. Completion requires CEO review and human
+confirmation; visual presence cannot be inferred from source code alone.
+```
+
+## 6. Atomic delegation
+
+### 6.1 Why a high-level primitive is required
 
 The current low-level sequence is unsafe as a product protocol:
 
@@ -165,7 +276,7 @@ wake enqueue
 
 If CEO omits or crashes between calls, a child Goal may exist without motion. The model should decide to delegate; deterministic code must make that decision effective atomically.
 
-### 5.2 Contract
+### 6.2 Contract
 
 ```ts
 interface DelegationRequest {
@@ -174,6 +285,7 @@ interface DelegationRequest {
   childGoal: {
     id: string;
     objective: string;
+    observationMethod: string;
     owner: string;
   };
   brief: JsonValue;
@@ -194,15 +306,15 @@ interface DelegationResult {
 1. validate CEO owns the parent Goal;
 2. validate evidence exists;
 3. append `delegation.created`;
-4. update the Goal projection;
-5. append a decision-level child mail;
+4. update the Goal projection with the objective/observation-method pair;
+5. append a decision-level child mail containing both;
 6. update mailbox projection;
 7. append/enqueue the child wake;
 8. update Wake projection.
 
 Failure rolls back all eight effects. Duplicate `delegationId` returns the existing result.
 
-### 5.3 Reassignment and retirement
+### 6.3 Reassignment and retirement
 
 `reassign` atomically:
 
@@ -215,7 +327,9 @@ Failure rolls back all eight effects. Duplicate `delegationId` returns the exist
 
 `complete_delegate` completes a child Goal, not an Agent record. If the owner has no remaining non-complete Goals, the roster derives `retired`.
 
-## 6. CEO tool surface
+## 7. CEO tool surface
+
+All Agents first receive `read`, `write`, `edit`, `bash`, and `handoff`. The table below is the additional CEO organization surface enforced by Supervisor role capabilities.
 
 The default CEO receives high-level tools:
 
@@ -235,13 +349,13 @@ The default CEO receives high-level tools:
 
 Low-level `goal.put` remains an internal/advanced capability, not the default CEO product tool.
 
-Child Agents keep the smaller surface: owned Goal context, ledger search, mail, own schedule, actions, audit acknowledgement, and handoff. They cannot delegate unless a deployment explicitly grants that role.
+Child Agents keep the smaller Goah control surface: owned Goal plus observation method, ledger search, mail, own schedule, actions, audit acknowledgement, and handoff. They still retain the four Pi coding tools. They cannot delegate unless a deployment explicitly grants that role.
 
-## 7. Default CEO Operating Policy
+## 8. Default CEO Operating Policy
 
 The policy is a built-in skill/prompt protocol. Open-ended judgments belong to the model; state transitions belong to tools and Supervisor checks.
 
-### 7.1 Wake loop
+### 8.1 Wake loop
 
 Every CEO wake follows six stages.
 
@@ -255,7 +369,10 @@ Read:
 - unread human/child mail;
 - latest handoff per child;
 - blockers, exhausted retries, unknown actions, and audit advice;
-- previous CEO assessment and next review.
+- previous CEO assessment and next review;
+- each Goal's current observation method and the root revision on which child work was based.
+
+When the root method is `null`, onboarding and operationalization take priority over ordinary execution. CEO inspects the working directory before asking questions and must not invent a data source, baseline, permission, or success criterion.
 
 #### 2. Diagnose motion
 
@@ -266,6 +383,7 @@ For every non-complete child Goal, determine:
 - Is ownership still coherent?
 - Is work duplicated across Agents?
 - Did new evidence invalidate the decomposition?
+- Is each Agent still using the authoritative observation method?
 
 #### 3. Decide organization
 
@@ -277,7 +395,8 @@ CEO chooses among:
 - reassign ownership;
 - pause or complete a child Goal;
 - merge responsibility by completing redundant children;
-- escalate a decision to the human.
+- escalate a decision to the human;
+- propose or revise an observation method when the objective or available evidence changes.
 
 No numerical split threshold is built in. The default reasoning guidance prefers delegation when work has an independent objective, evidence boundary, and result that can be reviewed without sharing the entire parent context.
 
@@ -296,6 +415,8 @@ Before handoff, every active child Goal must have exactly one defensible livenes
 
 Any `idle_unplanned` member must be repaired in this wake.
 
+Any active child without a non-empty observation method is also invalid. A quantitative or external root without a human-confirmed observation method may remain in onboarding/exploration, but CEO cannot claim measurable progress or completion.
+
 #### 6. Close the loop
 
 CEO exits with one of:
@@ -307,7 +428,7 @@ CEO exits with one of:
 
 “No action, no schedule, no blocker” is invalid while the root Goal is active.
 
-### 7.2 Re-plan triggers
+### 8.2 Re-plan triggers
 
 CEO is woken by:
 
@@ -320,20 +441,25 @@ CEO is woken by:
 - unknown/high-risk action;
 - audit finding;
 - CEO’s own scheduled review;
-- heartbeat violation.
+- heartbeat violation;
+- root or child observation-method revision;
+- stale, missing, or contradictory evidence under the current method.
 
 Trigger deduplication and queued-wake coalescing use the existing Wake mechanism.
 
-## 8. CEO Active Context
+## 9. CEO Active Context
 
 CEO receives a bounded organizational view, not raw team transcripts.
 
 ```markdown
 # Root objective
 
+# Root observation method
+- paid orders minus refunds; source=Shopify; freshness=12h
+
 # Goal tree
-- growth / active / owner=research
-- launch / blocked / owner=operator
+- growth / active / owner=research / observe=weekly experiment report
+- launch / blocked / owner=operator / observe=deployment check + screenshot
 
 # Team motion
 - research: running
@@ -354,7 +480,7 @@ CEO receives a bounded organizational view, not raw team transcripts.
 
 Raw Session events remain accessible through `ledger_search` and Inspector. Recovery uses the same semantic filtering already applied to ordinary Agents.
 
-## 9. Mechanical invariants
+## 10. Mechanical invariants
 
 | ID | Invariant |
 |---|---|
@@ -368,8 +494,13 @@ Raw Session events remain accessible through `ledger_search` and Inspector. Reco
 | C8 | Team roster is derived from ledger facts and never model self-report |
 | C9 | Duplicate delegation/reassignment IDs do not duplicate child work |
 | C10 | CEO recommendations never acquire human root authority |
+| C11 | Every delegated child Goal has a non-empty textual observation method |
+| C12 | Root observation method is non-null only after human authority writes it |
+| C13 | Changing an objective replaces or invalidates its observation method in the same revision |
+| C14 | Goal completion cites Ledger evidence produced under the current observation method |
+| C15 | Every Agent receives `read`, `write`, `edit`, and `bash`; organization role only changes Goah control tools |
 
-## 10. Failure semantics
+## 11. Failure semantics
 
 ### CEO crash
 
@@ -394,7 +525,7 @@ Raw Session events remain accessible through `ledger_search` and Inspector. Reco
 - Supervisor may retry once with the violation injected.
 - Repeated violation escalates to human rather than fabricating team motion.
 
-## 11. Human controls
+## 12. Human controls
 
 Human can always:
 
@@ -404,13 +535,15 @@ Human can always:
 - inspect roster, Goals, wakes, handoffs, and evidence;
 - force a CEO wake;
 - complete or cancel the root Goal;
-- stop the Supervisor process.
+- stop the Supervisor process;
+- confirm or replace the root observation method;
+- revise the root objective, which forces observation-method review and descendant revalidation.
 
 Child Agent messages are visible for inspection but normal replies route through CEO. Emergency safety notifications may bypass CEO and reach human directly.
 
-## 12. Implementation plan
+## 13. Implementation plan
 
-### Milestone A — contracts and atomic delegation
+### Milestone A — contracts and atomic delegation (implemented)
 
 - `TeamMemberView`
 - `DelegationRequest/Result`
@@ -421,7 +554,7 @@ Child Agent messages are visible for inspection but normal replies route through
 
 Acceptance: no probe can produce a child Goal without its decision mail and queued wake.
 
-### Milestone B — CEO tools and Operating Policy
+### Milestone B — CEO tools and Operating Policy (implemented)
 
 - high-level tool schemas
 - derived `team_list`
@@ -431,7 +564,7 @@ Acceptance: no probe can produce a child Goal without its decision mail and queu
 
 Acceptance: CEO cannot finish an active root while leaving an `idle_unplanned` child.
 
-### Milestone C — sole-entry product flow
+### Milestone C — lower-level product flow (implemented)
 
 - `goah goal start`
 - `goah ceo send/status/inbox`
@@ -439,9 +572,9 @@ Acceptance: CEO cannot finish an active root while leaving an `idle_unplanned` c
 - root creation automatically wakes CEO
 - status/dashboard show CEO recommendation and team roster
 
-Acceptance: a new user needs only init + one objective to start the organization.
+Acceptance: root creation, CEO messaging, status, approval, and automatic wake are available through CLI contracts.
 
-### Milestone D — real multi-Agent canary
+### Milestone D — real multi-Agent canary (deterministic canary implemented; real-model long run pending)
 
 Run a goal requiring at least two independent child Agents:
 
@@ -455,7 +588,21 @@ Run a goal requiring at least two independent child Agents:
 
 Acceptance: no direct human-to-child coordination and no manually created child wake.
 
-## 13. Required tests
+### Milestone E — interactive CEO and Goal observation methods (implemented)
+
+- `goah` starts or attaches to an interactive streaming CEO in the current directory;
+- the resident Supervisor owns a local control connection so interactive clients never contend for the SQLite lock;
+- every Agent receives Pi `read`, `write`, `edit`, and `bash` plus role-scoped Goah tools;
+- Goal schema and SQLite v8 add nullable `observation_method TEXT`;
+- first-root wake runs the filesystem-first operationalization protocol;
+- human confirmation writes the root method; CEO delegation requires a child method;
+- objective revisions invalidate or atomically replace the method and wake CEO for descendant review;
+- Active Context renders the method on every wake;
+- completion records evidence under the current Goal revision and method.
+
+Acceptance: one `goah` command starts a Codex-like CEO interaction; after process restarts, CEO and children use the exact confirmed observation methods and cannot silently drift to a different success definition.
+
+## 14. Required tests
 
 - top-level goal start automatically wakes CEO;
 - delegation is all-or-nothing under fault injection;
@@ -469,8 +616,17 @@ Acceptance: no direct human-to-child coordination and no manually created child 
 - CEO root-completion recommendation cannot mutate root phase;
 - restart/replay derives the identical roster and pending CEO decisions;
 - real-model canary completes without direct child orchestration by the test driver.
+- every Agent request exposes `read`, `write`, `edit`, and `bash` regardless of role;
+- a new root starts with a null method and CEO requests confirmation after inspecting the project;
+- CEO cannot directly authoritatively set a root method;
+- delegation without a child method rolls back without Goal, mail, or wake;
+- changing a child objective without a replacement method is rejected;
+- root objective revision invalidates the old method and queues CEO revalidation;
+- restart/replay renders the identical observation method;
+- completion without evidence under the current method is rejected;
+- interactive CLI can revise a Goal while the resident Supervisor remains running.
 
-## 14. Open questions
+## 15. Open questions
 
 These do not block Milestones A–C:
 
@@ -478,3 +634,5 @@ These do not block Milestones A–C:
 2. Whether child Agents may themselves delegate. Initial assumption: no; nested delegation is an optional later capability.
 3. Whether profile templates become durable ledger state. Initial assumption: deployment configuration owns templates; the ledger records the resolved profile name used for each wake.
 4. Whether every child handoff wakes CEO or only material/terminal ones. Initial assumption: terminal, blocked, decision-request, and retry-exhausted always wake; routine handoffs are coalesced into CEO’s scheduled review unless marked material.
+5. Whether a root objective revision always clears its method or may explicitly preserve it. Initial assumption: clear by default; the authenticated human may reconfirm an unchanged method.
+6. How interactive streaming clients reconnect to a running local Supervisor. Initial assumption: one local Unix socket (or platform equivalent) owned by the existing Supervisor process; no separate scheduling service.

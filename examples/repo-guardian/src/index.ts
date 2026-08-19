@@ -18,7 +18,6 @@ const model = process.env.GOAH_PI_MODEL;
 const piEnv = model ? {
   GOAH_PI_MODEL: model,
   GOAH_PI_PROVIDER: process.env.GOAH_PI_PROVIDER ?? "anthropic",
-  GOAH_PI_ALLOW_BASH: "true",
   ...forwardEnv(["GOAH_PI_BASE_URL", "GOAH_PI_MODEL_CAPABILITIES", "GOAH_PI_COMPACT_AT_TOKENS", "GOAH_PI_RETAIN_CONTEXT_TOKENS", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ARK_API_KEY"]),
 } : null;
 const runner = new ProcessRunner(model
@@ -35,7 +34,7 @@ const supervisor = new Supervisor(ledger, runner, new class { now(): Date { retu
   }],
 });
 
-if (!ledger.goal("repo-health")) supervisor.createGoal({ id: "repo-health", parentId: null, objective: "Keep the repository tests green", owner: "guardian", phase: "active", revision: 0 });
+if (!ledger.goal("repo-health")) supervisor.createGoal({ id: "repo-health", parentId: null, objective: "Keep the repository tests green", observationMethod: "Run the configured repository health metric and require a fresh passing result.", owner: "guardian", phase: "active", revision: 0 });
 const workerDir = fileURLToPath(new URL(".", import.meta.url));
 supervisor.registerMetricCollector("repo-health", { source: "repo.tests", window: "latest", direction: "at_least", target: 1, freshnessMs: 172_800_000, onMissing: "wake_owner", onStale: "wake_owner" }, { command: process.execPath, args: [join(workerDir, "metric-worker.js")], env: { GOAH_GUARD_REPO: repo, ...(process.env.GOAH_GUARD_TEST_COMMAND ? { GOAH_GUARD_TEST_COMMAND: process.env.GOAH_GUARD_TEST_COMMAND } : {}) }, timeoutMs: 310_000 }, 86_400_000);
 supervisor.registerConnector({

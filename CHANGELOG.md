@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+
+- Added durable textual Goal observation methods with SQLite schema v8 migration, root human confirmation, atomic child delegation, revision invalidation, replay, and evidence-backed completion.
+- Added a root-revision barrier that prevents stale child Goals from submitting new gated actions until CEO revises their objective/observation-method pair.
+- Every Pi Agent now receives the `read`, `write`, `edit`, and `bash` coding baseline plus `handoff`; Goah control tools remain role-scoped.
+- Added filesystem-first CEO onboarding policy and Active Context sections for observation methods and revision barriers.
+- Added a resident Supervisor local control socket and interactive `goah` shell, including live goal revisions and observation confirmation while the daemon owns SQLite.
+
 ## 0.4.0
 
 - Added the CEO Agent Operating Layer as the sole normal user entry: `goal start`, `ceo send/status/inbox/approve`, automatic CEO wakes, and a built-in operating policy.

@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { loadConfig, redactValue, SupervisorLock } from "./index.js";
+import { controlAvailable, controlEndpoint, loadConfig, redactValue, SupervisorLock } from "./index.js";
 
 const cli = fileURLToPath(new URL("./cli.js", import.meta.url));
 
@@ -120,18 +121,21 @@ test("session export redaction preserves structure while removing common secrets
 test("CLI exposes the complete goal lifecycle with revisioned transitions", () => {
   const directory = repository();
   invoke(directory, "init", "--provider", "faux", "--agent", "worker");
-  invoke(directory, "goal-create", "--id", "lifecycle", "--owner", "worker", "--objective", "Initial objective");
+  invoke(directory, "goal-create", "--id", "lifecycle", "--owner", "worker", "--objective", "Initial objective", "--observation-method", "Accept a fresh evidence-backed handoff.");
   assert.equal(JSON.parse(invoke(directory, "goal-show", "lifecycle")).goal.revision, 0);
-  const updated = JSON.parse(invoke(directory, "goal-update", "lifecycle", "--objective", "Updated objective"));
+  const updated = JSON.parse(invoke(directory, "goal-update", "lifecycle", "--objective", "Updated objective", "--observation-method", "Accept a fresh handoff for the updated objective."));
   assert.equal(updated.goal.objective, "Updated objective");
   assert.equal(updated.goal.revision, 1);
   assert.equal(JSON.parse(invoke(directory, "goal-pause", "lifecycle")).goal.phase, "paused");
   assert.equal(JSON.parse(invoke(directory, "goal-resume", "lifecycle")).goal.phase, "active");
-  const completed = JSON.parse(invoke(directory, "goal-complete", "lifecycle"));
+  invoke(directory, "wake", "worker", "--reason", "collect completion evidence");
+  invoke(directory, "run-once");
+  const evidenceSeq = JSON.parse(invoke(directory, "status")).recentHandoffs.at(-1).seq;
+  const completed = JSON.parse(invoke(directory, "goal-complete", "lifecycle", "--reason", "fresh handoff satisfies the observation method", "--evidence", String(evidenceSeq)));
   assert.equal(completed.goal.phase, "complete");
   assert.equal(completed.goal.revision, 4);
-  assert.match(invokeFailure(directory, "goal-resume", "lifecycle"), /invalid goal transition/);
-  assert.match(invokeFailure(directory, "goal-update", "lifecycle"), /requires objective or owner/);
+  assert.match(invokeFailure(directory, "goal-resume", "lifecycle"), /completed goal/);
+  assert.match(invokeFailure(directory, "goal-update", "lifecycle"), /requires objective, observation method, or owner/);
 });
 
 test("CLI runs a local operations goal without Git", () => {
@@ -159,3 +163,31 @@ test("CLI exposes one-objective CEO entry and coalesces human corrections", () =
   assert.equal(status.team.find((member: { agent: string }) => member.agent === "ceo").status, "queued");
   assert.deepEqual(JSON.parse(invoke(directory, "ceo", "inbox")), []);
 });
+
+test("CLI revises and confirms a root through the resident Supervisor control socket", async () => {
+  const directory = repository();
+  invoke(directory, "init", "--provider", "faux");
+  const config = loadConfig(join(directory, "goah.config.json"), { resolveSecrets: false });
+  const env = { ...process.env, GOAH_STATE_HOME: join(tmpdir(), "goah-cli-test-state") };
+  const daemon = spawn(process.execPath, [cli, "start"], { cwd: directory, env, stdio: "ignore" });
+  try {
+    await waitFor(async () => controlAvailable(config.stateDir));
+    if (process.platform !== "win32") assert.equal(statSync(controlEndpoint(config.stateDir)).mode & 0o777, 0o600);
+    const started = JSON.parse(invoke(directory, "goal", "start", "--id", "live", "--objective", "Grow revenue"));
+    assert.equal(started.goal.observationMethod, null);
+    const observed = JSON.parse(invoke(directory, "goal-update", "live", "--observation-method", "Run the net revenue report every six hours."));
+    assert.match(observed.observationMethod, /net revenue/);
+    const revised = JSON.parse(invoke(directory, "goal-update", "live", "--objective", "Grow retained net revenue"));
+    assert.equal(revised.observationMethod, null);
+    assert.equal(JSON.parse(invoke(directory, "ceo", "status")).roots[0].objective, "Grow retained net revenue");
+    assert.match(invoke(directory, "Review the revised goal and propose a new observation method"), /ceo wake/);
+  } finally {
+    daemon.kill("SIGTERM");
+    if (daemon.exitCode === null) await once(daemon, "close");
+  }
+});
+
+async function waitFor(predicate: () => Promise<boolean>): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!await predicate()) { if (Date.now() > deadline) throw new Error("condition timed out"); await new Promise((resolve) => setTimeout(resolve, 25)); }
+}

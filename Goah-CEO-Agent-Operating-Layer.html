@@ -58,7 +58,7 @@ pre{tab-size:2}.terminal pre,.context-window pre{margin:0;padding:18px 20px;over
 .context-layout{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(240px,.65fr);gap:20px}.context-notes{display:grid;gap:0;border-top:1px solid var(--line)}.context-note{padding:12px 0;border-bottom:1px solid var(--line);color:var(--muted)}.context-note b{display:block;margin-bottom:3px;color:var(--ink)}
 .invariants{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:4px;overflow:hidden}.invariant{display:grid;grid-template-columns:34px 1fr;gap:10px;padding:13px 15px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.invariant:nth-child(2n){border-right:0}.invariant b{color:var(--accent);font:600 11px var(--mono)}
 .failure-log{border:1px solid var(--line);border-radius:4px;overflow:hidden}.failure-row{display:grid;grid-template-columns:210px 1fr;border-bottom:1px solid var(--line)}.failure-row:last-child{border:0}.failure-row>*{padding:11px 14px}.failure-row b{border-right:1px solid var(--line);color:var(--danger);font:11px var(--mono)}.failure-row span{color:var(--muted)}
-.roadmap{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:4px;overflow:hidden}.phase{position:relative;min-height:172px;padding:18px 18px 42px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.phase:nth-child(2n){border-right:0}.phase .letter{float:left;margin-right:10px;color:var(--subtle);font:600 18px var(--mono)}.phase .status{color:var(--success);font:600 10px var(--mono);text-transform:uppercase}.phase h3{margin:8px 0 4px;font-size:17px}.phase p{margin:0;color:var(--muted)}.phase footer{position:absolute;right:18px;bottom:13px;left:18px;padding-top:8px;border-top:1px solid var(--line);color:var(--subtle);font:9px var(--mono)}
+.roadmap{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:4px;overflow:hidden}.phase{position:relative;min-height:172px;padding:18px 18px 42px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.phase:nth-child(2n){border-right:0}.phase .letter{float:left;margin-right:10px;color:var(--subtle);font:600 18px var(--mono)}.phase .status{color:var(--success);font:600 10px var(--mono);text-transform:uppercase}.phase .status.next{color:var(--warning)}.phase h3{margin:8px 0 4px;font-size:17px}.phase p{margin:0;color:var(--muted)}.phase footer{position:absolute;right:18px;bottom:13px;left:18px;padding-top:8px;border-top:1px solid var(--line);color:var(--subtle);font:9px var(--mono)}
 .tests{columns:2;column-gap:36px;margin:28px 0 0;padding:0;list-style:none;counter-reset:test}.tests li{counter-increment:test;position:relative;break-inside:avoid;padding:8px 0 8px 34px;border-bottom:1px solid var(--line)}.tests li::before{content:counter(test,decimal-leading-zero);position:absolute;left:0;color:var(--accent);font:10px var(--mono)}
 .questions{border:1px solid var(--line);border-radius:4px;overflow:hidden}.question{display:grid;grid-template-columns:36px 1fr;gap:10px;padding:14px;border-bottom:1px solid var(--line)}.question:last-child{border:0}.question b{color:var(--accent);font:11px var(--mono)}.question p{margin:0}.question small{display:block;margin-top:3px;color:var(--muted)}
 .doc-footer{display:flex;justify-content:space-between;gap:20px;padding:28px clamp(48px,7vw,88px) 42px;color:var(--subtle);font:10px var(--mono)}
@@ -72,15 +72,16 @@ pre{tab-size:2}.terminal pre,.context-window pre{margin:0;padding:18px 20px;over
 <div class="shell">
 <aside class="rail">
   <a class="brand" href="#top">GO<span>AH</span></a>
-  <div class="rail-kicker">Technical design<br>Revision 0.2</div>
+  <div class="rail-kicker">Technical design<br>Revision 0.4</div>
   <nav aria-label="Document sections">
     <a href="#interface" data-id="01"><span>Product contract</span></a>
-    <a href="#team" data-id="02"><span>Derived team model</span></a>
-    <a href="#delegate" data-id="03"><span>Atomic operations</span></a>
-    <a href="#policy" data-id="04"><span>Runtime policy</span></a>
-    <a href="#context" data-id="05"><span>Active context</span></a>
-    <a href="#invariants" data-id="06"><span>Invariants</span></a>
-    <a href="#ship" data-id="07"><span>Implementation status</span></a>
+    <a href="#observation" data-id="02"><span>Observation method</span></a>
+    <a href="#team" data-id="03"><span>Derived team model</span></a>
+    <a href="#delegate" data-id="04"><span>Atomic operations</span></a>
+    <a href="#policy" data-id="05"><span>Runtime policy</span></a>
+    <a href="#context" data-id="06"><span>Active context</span></a>
+    <a href="#invariants" data-id="07"><span>Invariants</span></a>
+    <a href="#ship" data-id="08"><span>Implementation status</span></a>
   </nav>
   <div class="rail-bottom">
     <div class="signal">IMPLEMENTED A–C</div>
@@ -95,28 +96,77 @@ pre{tab-size:2}.terminal pre,.context-window pre{margin:0;padding:18px 20px;over
     <div class="overline">Technical design document</div>
     <h1>Goah CEO Agent Operating Layer<span>用户入口、组织运行协议与机械保证</span></h1>
     <p class="hero-lead">本文定义 CEO Agent 如何作为 Goah 的唯一正常用户入口，将人类意图转换为持久 Goal 树，组织短命 Agent，检查证据，并在跨 Session、跨时间运行中维持组织连续性。</p>
-    <div class="hero-meta"><span class="chip hot">IMPLEMENTED / A–C</span><span class="chip">PRODUCT ARCHITECTURE 0.2</span><span class="chip">2026-08-19</span></div>
+    <div class="hero-meta"><span class="chip hot">IMPLEMENTED / A–C, E</span><span class="chip">PRODUCT ARCHITECTURE 0.4</span><span class="chip">2026-08-20</span></div>
     <div class="thesis"><b>ARCHITECTURAL DECISION</b><br>CEO 不是常驻进程，而是每次 wake 时由 Ledger 重建的持久身份。模型负责开放式组织判断；Supervisor 和 SQLite 负责状态转换、原子性与恢复语义。</div>
   </div>
 </header>
 
 <section class="section reveal" id="interface">
-  <div class="section-head"><div class="section-id">01 · Product contract</div><h2>唯一用户入口与权限边界</h2><p class="section-intro">用户不管理 child 名称、schedule 或 wake。正常操作只有目标、消息、审批和最终完成。</p></div>
-  <div class="terminal"><div class="terminal-bar"><span>goah / human console</span><b>SOLE ENTRY</b></div><pre>goah goal start --objective "Launch a profitable store"
-goah ceo send --message "Prioritize low inventory risk"
-goah ceo status
-goah ceo inbox
-goah ceo approve &lt;action-id&gt; --reason "..." --evidence &lt;seqs&gt;
-goah goal complete &lt;root-goal-id&gt;</pre></div>
+  <div class="section-head"><div class="section-id">01 · Product contract</div><h2>交互式 CEO 与权限边界</h2><p class="section-intro">正常体验应与 Codex / Claude Code 一致：用户在当前目录运行一个命令，进入持续的 CEO 对话；Goal、Wake 和 child 名称仍是可检查的内部概念。</p></div>
+  <div class="terminal"><div class="terminal-bar"><span>primary entry</span><b>INTERACTIVE CEO</b></div><pre>goah
+goah "Launch a profitable store"
+goah --continue</pre></div>
+  <div class="thesis"><b>IMPLEMENTED IN 0.5.0</b><br>交互式 shell 会启动或连接 resident Supervisor；所有用户写操作通过本地 control socket，由 Supervisor 作为唯一 SQLite writer 提交。低层 goal/ceo 命令继续作为自动化与运维接口。</div>
   <div class="authority">
     <article class="authority-card"><div class="label">PURPOSE AUTHORITY</div><h3>Human controls why.</h3><p>创建、修订、暂停、恢复、完成 root Goal。root 的执行 owner 是 CEO，但目的层永远属于人类。</p></article>
     <div class="authority-lock">↔</div>
     <article class="authority-card"><div class="label">METHOD AUTHORITY</div><h3>CEO controls how.</h3><p>拆解 descendants、委派 ownership、重组团队。只能推荐 root completion，不能替人类完成根目标。</p></article>
   </div>
+  <div class="section-head" style="margin-top:38px"><div class="section-id">Universal work surface</div><h2 style="font-size:22px">所有 Agent 的 Pi 基础工具</h2><p class="section-intro">组织角色只限制 Goah 控制工具，不应剥夺普通工作能力。CEO 和每个 child 默认拥有同一套本地工作基础设施。</p></div>
+  <div class="tool-grid">
+    <div class="tool"><code>read</code><span>读取项目文件和既有材料</span></div><div class="tool"><code>write</code><span>创建完整文件与 artifact</span></div>
+    <div class="tool"><code>edit</code><span>进行有边界的局部修改</span></div><div class="tool"><code>bash</code><span>枚举目录、搜索、执行脚本、测试和本地 CLI</span></div>
+  </div>
+  <div class="thesis"><b>FILESYSTEM-FIRST DISCOVERY</b><br>Agent 使用 Bash 和文件工具读取当前目录、`goah.config.json`、脚本与非敏感 manifest。无需为了镜像可读配置而增加 capability / connector / metric 发现 RPC；Ledger 查询和受保护写入仍通过 Supervisor RPC。</div>
+</section>
+
+<section class="section reveal" id="observation">
+  <div class="section-head"><div class="section-id">02 · Durable evaluation contract</div><h2>Goal Observation Method</h2><p class="section-intro">Objective 描述要实现什么；Observation Method 描述每次 wake 必须如何观察现实、判断进展与完成。它是一段持久 Markdown，类似每个 Goal 专属的微型 Skill。</p></div>
+  <div class="terminal"><div class="terminal-bar"><span>GoalSnapshot / SQLite v8</span><b>TEXT, NOT A METRIC SCHEMA</b></div><pre>interface GoalSnapshot {
+  id: string;
+  parentId: string | null;
+  objective: string;
+  observationMethod: string | null;
+  owner: string;
+  phase: GoalPhase;
+  revision: number;
+}
+
+-- SQLite projection
+observation_method TEXT</pre></div>
+  <div class="authority">
+    <article class="authority-card"><div class="label">ROOT GOAL</div><h3>CEO proposes; human confirms.</h3><p>新 root 从 null 开始。CEO 先探索项目、口径和数据来源，再提交 observation method 给用户确认。非空 root method 只能由 human authority 写入。</p></article>
+    <article class="authority-card"><div class="label">CHILD GOAL</div><h3>CEO writes the pair.</h3><p>Delegation 必须同时写 objective 与非空 observation method。修改 child objective 时，必须在同一 revision 中替换 method。</p></article>
+  </div>
+  <div class="section-head" style="margin-top:38px"><div class="section-id">Root onboarding protocol</div><h2 style="font-size:22px">第一次 wake 先建立可靠观测</h2></div>
+  <div class="policy-list">
+    <article class="policy-stage"><h3>Inspect locally</h3><p>用 read、edit、write、bash 检查 cwd、项目文档、代码、脚本、本地 CLI、配置与已有 Ledger 证据。</p></article>
+    <article class="policy-stage"><h3>Clarify success</h3><p>确认目标约束、当前 baseline 与“完成”的实际含义，不把自然语言中的歧义当事实。</p></article>
+    <article class="policy-stage"><h3>Define observation</h3><p>对定量或外部结果明确 source、计算口径、freshness、cadence、时区、持续周期和缺失数据行为。</p></article>
+    <article class="policy-stage"><h3>List access</h3><p>说明每个数据源和子目标需要的权限；无法从项目发现的部分才请求用户。</p></article>
+    <article class="policy-stage"><h3>Explore safely</h3><p>等待确认时仍可开展安全、可逆的调查；探索 child 也必须有自己的 observation method。</p></article>
+    <article class="policy-stage"><h3>Confirm</h3><p>CEO 发送草案，用户确认后由 human authority 写入 root projection 并增加 revision。</p></article>
+    <article class="policy-stage"><h3>Hold the definition</h3><p>每次 CEO/child wake 强制装载当前 method；完成必须引用按该方法产生的 Ledger evidence。</p></article>
+  </div>
+  <div class="context-layout" style="margin-top:32px">
+    <div class="context-window"><div class="top"><span>revenue-goal.observation.md</span><span>EXAMPLE</span></div><pre>使用 Shopify paid orders 作为事实源。
+
+收入定义：paid amount - refunds；排除 tax 和 shipping；
+按 Asia/Shanghai 自然月统计。
+
+每 6 小时运行 scripts/revenue-report.ts。
+结果包含订单数、gross、refunds 与 net revenue。
+数据超过 12 小时不得支持进展或完成判断。</pre></div>
+    <div class="context-notes">
+      <div class="context-note"><b>不限于数字</b>可以是脚本、查询、checklist、artifact 检查或 human confirmation。</div>
+      <div class="context-note"><b>目标与方法成对 revision</b>修改 objective 时同步替换，或把 root method 清回 null 等待重新确认。</div>
+      <div class="context-note"><b>不持久化密钥</b>文本记录数据来源和所需权限，凭证仍由部署环境持有。</div>
+    </div>
+  </div>
 </section>
 
 <section class="section reveal" id="team">
-  <div class="section-head"><div class="section-id">02 · Derived projection</div><h2>派生团队模型</h2><p class="section-intro">不新增 Agent 事实表。一个 owner 是否存在、是否在动、是否退休，全部从 Goal、Wake、Schedule 与 Handoff 推导。</p></div>
+  <div class="section-head"><div class="section-id">03 · Derived projection</div><h2>派生团队模型</h2><p class="section-intro">不新增 Agent 事实表。一个 owner 是否存在、是否在动、是否退休，全部从 Goal、Wake、Schedule 与 Handoff 推导。</p></div>
   <div class="roster">
     <div class="roster-row head"><span>OWNER</span><span>STATE</span><span>DERIVATION</span><span>REV</span></div>
     <div class="roster-row"><span class="roster-name">research</span><span class="state running">running</span><span class="roster-desc">active goal + running wake</span><span class="roster-rev">r12</span></div>
@@ -128,16 +178,16 @@ goah goal complete &lt;root-goal-id&gt;</pre></div>
 </section>
 
 <section class="section reveal" id="delegate">
-  <div class="section-head"><div class="section-id">03 · Transaction boundary</div><h2>原子 Delegation 与高层工具</h2><p class="section-intro">模型判断是否委派；Supervisor 保证这个判断不会留下“有 Goal、没人醒”的半完成组织。</p></div>
+  <div class="section-head"><div class="section-id">04 · Transaction boundary</div><h2>原子 Delegation 与高层工具</h2><p class="section-intro">模型判断是否委派；Supervisor 保证 objective、observation method、mail 和 wake 形成一个不可拆分的组织决定。</p></div>
   <div class="delegate-track">
-    <article class="delegate-step"><div class="n">01</div><h3>Goal</h3><p>创建 child objective 与 owner。</p></article>
+    <article class="delegate-step"><div class="n">01</div><h3>Goal pair</h3><p>创建 child objective、observation method 与 owner。</p></article>
     <article class="delegate-step"><div class="n">02</div><h3>Evidence</h3><p>记录 delegation ID、reason 和 seq。</p></article>
-    <article class="delegate-step"><div class="n">03</div><h3>Mail</h3><p>投递 decision-level brief。</p></article>
+    <article class="delegate-step"><div class="n">03</div><h3>Mail</h3><p>投递包含目标与观测方法的 decision brief。</p></article>
     <article class="delegate-step"><div class="n">04</div><h3>Wake</h3><p>立即 enqueue 新 owner。</p></article>
   </div>
   <div class="atomic">ONE SQLITE TRANSACTION · IDEMPOTENT BY DELEGATION ID</div>
   <div class="tool-grid" style="margin-top:32px">
-    <div class="tool"><code>team_list</code><span>派生 roster、liveness 与 Goal ownership</span></div><div class="tool"><code>delegate</code><span>原子创建 child Goal + mail + wake</span></div>
+    <div class="tool"><code>team_list</code><span>派生 roster、liveness 与 Goal ownership</span></div><div class="tool"><code>delegate</code><span>原子创建 child Goal pair + mail + wake</span></div>
     <div class="tool"><code>reassign_goal</code><span>转移 ownership，通知双方，只 wake 新 owner</span></div><div class="tool"><code>pause / resume</code><span>控制 child motion，不销毁历史</span></div>
     <div class="tool"><code>complete_goal</code><span>完成 child；无其他 Goal 时 owner retired</span></div><div class="tool"><code>request_human</code><span>请求人类决策或 root completion</span></div>
     <div class="tool"><code>schedule_review</code><span>设置 CEO 下一次组织 review</span></div><div class="tool"><code>submit_action</code><span>沿用外部副作用的审计协议</span></div>
@@ -145,13 +195,13 @@ goah goal complete &lt;root-goal-id&gt;</pre></div>
 </section>
 
 <section class="section reveal" id="policy">
-  <div class="section-head"><div class="section-id">04 · Runtime policy</div><h2>CEO Operating Policy 与触发条件</h2><p class="section-intro">开放式判断留给模型；组织变化只通过可审计、高层、原子工具生效。</p></div>
+  <div class="section-head"><div class="section-id">05 · Runtime policy</div><h2>CEO Operating Policy 与触发条件</h2><p class="section-intro">开放式判断留给模型；组织变化只通过可审计、高层、原子工具生效。</p></div>
   <div class="policy-list">
-    <article class="policy-stage"><h3>Orient</h3><p>读取 root、Goal tree、roster、mail、child handoffs、blockers、unknown actions 与 previous plan。</p></article>
-    <article class="policy-stage"><h3>Diagnose motion</h3><p>逐个 Goal 判断是否正在运行、排队、计划、等待，或已经失去 ownership coherence。</p></article>
-    <article class="policy-stage"><h3>Decide organization</h3><p>保持、delegate、revise、reassign、pause、complete、merge，或者升级给人类。</p></article>
+    <article class="policy-stage"><h3>Orient</h3><p>读取 root、Goal tree、每个 observation method、roster、mail、handoffs、blockers、unknown actions 与 previous plan。</p></article>
+    <article class="policy-stage"><h3>Diagnose motion</h3><p>逐个 Goal 判断是否在运行、排队、计划或等待，以及 owner 是否仍按权威 observation method 工作。</p></article>
+    <article class="policy-stage"><h3>Decide organization</h3><p>保持、delegate、revise objective/method、reassign、pause、complete、merge，或者升级给人类。</p></article>
     <article class="policy-stage"><h3>Apply decisions</h3><p>只使用高层原子工具；不允许用多个低层调用模拟 delegation。</p></article>
-    <article class="policy-stage"><h3>Ensure motion</h3><p>每个 active child 必须有 wake、schedule、wait trigger，或一个已经升级的 blocker。</p></article>
+    <article class="policy-stage"><h3>Ensure motion</h3><p>每个 active child 必须有非空 method，以及 wake、schedule、wait trigger 或已升级 blocker。</p></article>
     <article class="policy-stage"><h3>Close the loop</h3><p>声明下一次 review、等待触发、人类 blocker，或提交 completion recommendation。</p></article>
   </div>
   <div class="exit-rule"><b>Invalid exit</b><span>root 仍 active，但 CEO handoff 无 delegation、无 schedule、无 wait、无 blocker。</span></div>
@@ -159,18 +209,23 @@ goah goal complete &lt;root-goal-id&gt;</pre></div>
     <div class="trigger">root create / revise / resume</div><div class="trigger critical">child complete / blocked</div>
     <div class="trigger critical">retry exhausted</div><div class="trigger">material child handoff</div>
     <div class="trigger critical">decision request</div><div class="trigger critical">unknown high-risk action</div>
+    <div class="trigger">observation method revised</div><div class="trigger">evidence missing / stale</div>
     <div class="trigger">audit finding</div><div class="trigger">CEO scheduled review</div>
   </div>
 </section>
 
 <section class="section reveal" id="context">
-  <div class="section-head"><div class="section-id">05 · Model input</div><h2>CEO Active Context</h2><p class="section-intro">CEO 的上下文是有界组织视图，不是所有 child transcript 的拼接。</p></div>
+  <div class="section-head"><div class="section-id">06 · Model input</div><h2>CEO Active Context</h2><p class="section-intro">CEO 的上下文是有界组织视图，不是所有 child transcript 的拼接；Goal 的 observation method 是每次装载的权威判断协议。</p></div>
   <div class="context-layout">
-    <div class="context-window"><div class="top"><span>CEO_ACTIVE_CONTEXT.md</span><span>6.2 KB / 1M</span></div><pre># Root objective
+    <div class="context-window"><div class="top"><span>CEO_ACTIVE_CONTEXT.md</span><span>BOUNDED VIEW</span></div><pre># Root objective
+
+# Root observation method
+— Shopify paid orders minus refunds
+— freshness: 12h
 
 # Goal tree
-— growth / active / research
-— launch / blocked / operator
+— growth / active / research / weekly experiment report
+— launch / blocked / operator / deploy check + screenshot
 
 # Team motion
 — research: running
@@ -193,13 +248,16 @@ goah goal complete &lt;root-goal-id&gt;</pre></div>
 </section>
 
 <section class="section reveal" id="invariants">
-  <div class="section-head"><div class="section-id">06 · Safety properties</div><h2>机械不变量与故障语义</h2><p class="section-intro">CEO 可以判断错，但不能让错误判断绕过组织状态机。</p></div>
+  <div class="section-head"><div class="section-id">07 · Safety properties</div><h2>机械不变量与故障语义</h2><p class="section-intro">CEO 可以判断错，但不能让错误判断绕过组织状态机或在 wake 之间悄悄更换成功定义。</p></div>
   <div class="invariants">
     <div class="invariant"><b>C1</b><span>只有 human authority 可修改或完成 root Goal。</span></div><div class="invariant"><b>C2</b><span>delegation 原子提交 Goal + mail + wake。</span></div>
     <div class="invariant"><b>C3</b><span>每个 active child Goal 必须有 owner。</span></div><div class="invariant"><b>C4</b><span>每个 active child 必须有 liveness route 或 blocker。</span></div>
     <div class="invariant"><b>C5</b><span>CEO 不得留下 motionless active root。</span></div><div class="invariant"><b>C6</b><span>child terminal / blocked / exhausted 必须 wake CEO。</span></div>
     <div class="invariant"><b>C7</b><span>complete Goal 不再接受自动 wake。</span></div><div class="invariant"><b>C8</b><span>roster 从 facts 推导，不信模型自述。</span></div>
     <div class="invariant"><b>C9</b><span>重复 delegation ID 不产生重复工作。</span></div><div class="invariant"><b>C10</b><span>CEO recommendation 永不获得 root authority。</span></div>
+    <div class="invariant"><b>C11</b><span>每个 delegated child 必须有非空 textual observation method。</span></div><div class="invariant"><b>C12</b><span>root method 非空只可能来自 human authority。</span></div>
+    <div class="invariant"><b>C13</b><span>修改 objective 必须同步替换或失效 method。</span></div><div class="invariant"><b>C14</b><span>Goal completion 引用当前 method 下产生的 Ledger evidence。</span></div>
+    <div class="invariant"><b>C15</b><span>每个 Agent 都有 read / write / edit / bash；role 只限制 Goah 控制工具。</span></div>
   </div>
   <div class="failure-log" style="margin-top:30px">
     <div class="failure-row"><b>CEO_CRASH_PRE_COMMIT</b><span>无组织变化。</span></div><div class="failure-row"><b>CEO_CRASH_POST_COMMIT</b><span>Goal / mail / wake 全部存在；重试幂等。</span></div>
@@ -208,17 +266,20 @@ goah goal complete &lt;root-goal-id&gt;</pre></div>
 </section>
 
 <section class="section reveal" id="ship">
-  <div class="section-head"><div class="section-id">07 · Delivery</div><h2>实现状态与验证计划</h2><p class="section-intro">Milestone A–C 已实现，确定性双 child canary 已通过；真实模型长跑仍属于运营验证。</p></div>
+  <div class="section-head"><div class="section-id">08 · Delivery</div><h2>实现状态与验证计划</h2><p class="section-intro">Milestone A–C 与 E 已实现，确定性双 child canary 已通过；真实模型长跑仍属于运营验证。</p></div>
   <div class="roadmap">
     <article class="phase"><div class="letter">A</div><div class="status">Implemented</div><h3>Atomic delegation</h3><p>roster、commitDelegation、CEO triggers、幂等与故障注入。</p><footer>NO ORPHAN GOAL WITHOUT MAIL + WAKE</footer></article>
     <article class="phase"><div class="letter">B</div><div class="status">Implemented</div><h3>CEO protocol</h3><p>高层 tools、Operating Policy、motion validation。</p><footer>NO IDLE_UNPLANNED CHILD</footer></article>
     <article class="phase"><div class="letter">C</div><div class="status">Implemented</div><h3>One front door</h3><p>goal start、ceo send/status/inbox、default CEO init。</p><footer>INIT + ONE OBJECTIVE</footer></article>
     <article class="phase"><div class="letter">D</div><div class="status">Deterministic canary</div><h3>Organization run</h3><p>2+ children、recovery、reassign/retire、human complete；真实模型长跑待运营验证。</p><footer>NO MANUAL CHILD ORCHESTRATION</footer></article>
+    <article class="phase"><div class="letter">E</div><div class="status">Implemented</div><h3>Interactive + observation</h3><p><code>goah</code> interactive shell、Supervisor local control connection、所有 Agent 的四个 Pi 工具、SQLite v8 observation_method。</p><footer>ONE COMMAND · ONE DURABLE DEFINITION</footer></article>
   </div>
   <ol class="tests">
     <li>root start 自动 wake CEO</li><li>delegation fault injection 全有或全无</li><li>duplicate delegation 幂等</li><li>新 owner 使用 default child profile</li>
     <li>child terminal/block/exhausted wake CEO</li><li>reassign 只 wake 新 owner</li><li>complete child 不再自动 wake</li><li>roster 检测 idle_unplanned</li>
     <li>无 motion 的 CEO handoff 被拒绝</li><li>CEO 无法修改 root phase</li><li>restart/replay 得到相同 roster</li><li>真实 canary 无人工 child orchestration</li>
+    <li>所有 role 都暴露 read/write/edit/bash</li><li>新 root method 为 null 并由 CEO 探索后请求 human confirmation</li><li>delegation 缺少 child method 时事务回滚</li><li>修改 objective 时 method 同 revision 替换或失效</li>
+    <li>restart/replay 得到相同 observation method</li><li>interactive CLI 在 resident Supervisor 运行时仍可 revision Goal</li>
   </ol>
   <h3 style="margin-top:44px;font-size:20px">Open questions</h3>
   <div class="questions">
@@ -226,10 +287,12 @@ goah goal complete &lt;root-goal-id&gt;</pre></div>
     <div class="question"><b>Q2</b><p>child 可以继续 delegate？<small>Initial: no. Nested delegation comes later.</small></p></div>
     <div class="question"><b>Q3</b><p>profile templates 进入 Ledger？<small>Initial: deployment config owns templates; wake records resolved name.</small></p></div>
     <div class="question"><b>Q4</b><p>每个 child handoff 都 wake CEO？<small>Initial: terminal/material immediately; routine work coalesces into review.</small></p></div>
+    <div class="question"><b>Q5</b><p>root objective 修改后是否总是清空 method？<small>Initial: clear by default; human may explicitly reconfirm an unchanged method.</small></p></div>
+    <div class="question"><b>Q6</b><p>交互式 shell 如何连接 resident Supervisor？<small>Initial: one local Unix socket or platform equivalent; no separate scheduler service.</small></p></div>
   </div>
 </section>
 
-<footer class="doc-footer"><span>IMPLEMENTED A–C // REAL-MODEL LONG-RUN REMAINS OPERATIONAL VALIDATION</span><span><a href="./Goah-架构设计-v2.html">SYSTEM ARCHITECTURE</a> · <a href="./docs/proposals/ceo-agent-operating-layer.md">MARKDOWN</a></span></footer>
+<footer class="doc-footer"><span>IMPLEMENTED A–C + E // REAL-MODEL LONG-RUN REMAINS OPERATIONAL VALIDATION</span><span><a href="./Goah-架构设计-v2.html">SYSTEM ARCHITECTURE</a> · <a href="./docs/proposals/ceo-agent-operating-layer.md">MARKDOWN</a></span></footer>
 </main>
 </div>
 <script>

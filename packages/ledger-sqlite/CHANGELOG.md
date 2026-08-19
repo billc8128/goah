@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0
+
+- Added SQLite schema v8 observation methods, migration/replay support, atomic method delegation, and current-revision completion evidence.
+
 ## 0.4.0
 
 - Schema v7 persists `EventRecord.ignorable` and adds SQL Goal phase checks/transitions.

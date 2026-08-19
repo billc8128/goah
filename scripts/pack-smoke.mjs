@@ -18,9 +18,9 @@ execFileSync("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", t
 execFileSync(process.execPath, ["--input-type=module", "-e", `
   const modules = await Promise.all([
     import('@goah/cli/kernel'), import('@goah/cli/session'), import('@goah/cli/execution'), import('@goah/cli/metrics'),
-    import('@goah/cli/sqlite'), import('@goah/cli/supervisor'), import('@goah/cli/runner-pi'), import('@goah/cli/testkit')
+    import('@goah/cli/sqlite'), import('@goah/cli/supervisor'), import('@goah/cli/runner-pi'), import('@goah/cli/testkit'), import('@goah/cli')
   ]);
-  const names = ['controlStream','replaySession','assertHandoff','evaluateMetric','SqliteLedger','Supervisor','ProcessRunner','SimulatedClock'];
+  const names = ['controlStream','replaySession','assertHandoff','evaluateMetric','SqliteLedger','Supervisor','ProcessRunner','SimulatedClock','controlEndpoint'];
   for (let index = 0; index < names.length; index += 1) if (typeof modules[index][names[index]] !== 'function') throw new Error('missing public subpath export: '+names[index]);
 `], { cwd: app, stdio: "pipe" });
 execFileSync("git", ["init", "-b", "main"], { cwd: app });
@@ -34,7 +34,9 @@ const run = (...args) => execFileSync(bin, args, { cwd: app, encoding: "utf8" })
 run("init", "--provider", "faux", "--agent", "worker");
 const doctor = JSON.parse(run("doctor"));
 if (!doctor.ok) throw new Error(`packed CLI doctor failed: ${JSON.stringify(doctor)}`);
-run("goal-create", "--id", "pack-smoke", "--owner", "worker", "--objective", "Prove the installed CLI works", "--wake-now");
+run("goal-create", "--id", "pack-smoke", "--owner", "worker", "--objective", "Prove the installed CLI works", "--observation-method", "Accept a fresh evidence-backed handoff from the installed CLI");
+run("goal-pause", "pack-smoke");
+run("goal-resume", "pack-smoke");
 const wake = JSON.parse(run("run-once")).wake;
 const status = JSON.parse(run("status"));
 if (wake?.status !== "done" || status.wakes?.length !== 1 || status.recentHandoffs?.length !== 1) throw new Error("packed CLI did not complete the first handoff");
@@ -44,9 +46,7 @@ const exported = join(app, "session.json");
 run("session", "export", wake.id, "--output", exported);
 if (sessions[0]?.wakeId !== wake.id || sessions[0]?.formatVersion !== 1 || detail.eventTypes?.["request.prepared"] !== 1 || JSON.parse(readFileSync(exported, "utf8")).redacted !== true) throw new Error("packed CLI session inspector failed");
 run("goal-show", "pack-smoke");
-run("goal-pause", "pack-smoke");
-run("goal-resume", "pack-smoke");
-const completedGoal = JSON.parse(run("goal-complete", "pack-smoke")).goal;
+const completedGoal = JSON.parse(run("goal-complete", "pack-smoke", "--reason", "fresh packed-runner handoff satisfies the observation method", "--evidence", String(status.recentHandoffs.at(-1).seq))).goal;
 if (completedGoal.phase !== "complete" || completedGoal.revision !== 3) throw new Error("packed CLI goal lifecycle failed");
 
 process.stdout.write(`${JSON.stringify({ ok: true, app, packages: 1, bundledModules: packed[0].bundled.length, wake: wake.id }, null, 2)}\n`);

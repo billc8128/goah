@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0
+
+- Added filesystem-first CEO onboarding, observation/revision Active Context, completion evidence, and stale-child gated-action barriers.
+
 ## 0.4.0
 
 - Added revisioned Goal update and lifecycle transition APIs.

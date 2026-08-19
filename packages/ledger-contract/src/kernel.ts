@@ -1,4 +1,4 @@
-export const CONTRACT_VERSION = "0.4.0" as const;
+export const CONTRACT_VERSION = "0.5.0" as const;
 export const CONTRACT_STABILITY = "experimental" as const;
 
 export type JsonPrimitive = string | number | boolean | null;

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0
+
+- Every Agent now receives Pi `read`, `write`, `edit`, and `bash`; organization RPC tools remain role-scoped.
+
 ## 0.4.0
 
 - New Session streams declare format version 1 in `session.started`.

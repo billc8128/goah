@@ -40,7 +40,25 @@ test("schema v6 adds the ignorable event envelope and goal phase constraints", (
   const migrated = new SqliteLedger(path, { clock: new FixedClock() });
   const columns = (migrated.db.prepare("PRAGMA table_info(events)").all() as Array<{ name: string }>).map((row) => row.name);
   assert.equal(columns.includes("ignorable"), true);
-  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 7);
+  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 8);
+  migrated.close();
+});
+
+test("schema v7 adds nullable Goal observation methods without rewriting history", () => {
+  const path = join(mkdtempSync(join(tmpdir(), "goah-v7-")), "ledger.sqlite");
+  new SqliteLedger(path, { clock: new FixedClock() }).close();
+  const raw = new DatabaseSync(path);
+  raw.exec(`DROP TRIGGER goals_valid_transition;
+    ALTER TABLE goals RENAME TO goals_v8;
+    CREATE TABLE goals(id TEXT PRIMARY KEY,parent_id TEXT,objective TEXT,owner TEXT,phase TEXT,revision INTEGER);
+    INSERT INTO goals SELECT id,parent_id,objective,owner,phase,revision FROM goals_v8;
+    DROP TABLE goals_v8;
+    PRAGMA user_version=7;`);
+  raw.close();
+  const migrated = new SqliteLedger(path, { clock: new FixedClock() });
+  const columns = (migrated.db.prepare("PRAGMA table_info(goals)").all() as Array<{ name: string }>).map((row) => row.name);
+  assert.equal(columns.includes("observation_method"), true);
+  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 8);
   migrated.close();
 });
 
@@ -48,7 +66,7 @@ test("schema has events plus five projections and replay reproduces all of them"
   const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
   const tables = (ledger.db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name IN ('actions','events','goals','mailbox','schedule','wakes') ORDER BY name").all() as Array<{ name: string }>).map(({ name }) => name);
   assert.deepEqual(tables, ["actions", "events", "goals", "mailbox", "schedule", "wakes"]);
-  const root: GoalSnapshot = { id: "root", parentId: null, objective: "keep tests green", owner: "agent-1", phase: "active", revision: 0 };
+  const root: GoalSnapshot = { id: "root", parentId: null, objective: "keep tests green", observationMethod: null, owner: "agent-1", phase: "active", revision: 0 };
   ledger.putGoal(root, "human");
   ledger.putSchedule({ id: "s1", agent: "agent-1", nextWakeAt: "2030-01-01T00:00:00.000Z", reason: "start", setBy: "agent-1" }, "agent-1");
   ledger.enqueueWake(wake("w1"), "supervisor");
@@ -163,7 +181,7 @@ test("schema v1 is migrated without rewriting event history", () => {
   assert.equal(ledger.wake("w")?.enqueuedSeq, 1);
   assert.match(ledger.wake("w")?.leaseToken ?? "", /^legacy:/);
   assert.equal(ledger.action("a")?.connector, "legacy");
-  assert.equal((ledger.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 7);
+  assert.equal((ledger.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 8);
   assert.equal(ledger.events().length, 2);
   ledger.rebuildProjections();
   assert.equal(ledger.wake("w")?.enqueuedSeq, 1);
@@ -181,7 +199,7 @@ test("schema v2 migration builds the FTS index from existing events", () => {
   raw.close();
   const migrated = new SqliteLedger(path, { clock: new FixedClock() });
   assert.equal(migrated.searchEvents("migrationsearchterm").length, 1);
-  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 7);
+  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 8);
   migrated.close();
 });
 
@@ -196,7 +214,7 @@ test("schema v3 migration indexes coalesced wake triggers", () => {
   raw.close();
   const migrated = new SqliteLedger(path, { clock: new FixedClock() });
   assert.equal(migrated.wakeByTrigger("a", "metric:g:missing:none")?.id, "w");
-  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 7);
+  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 8);
   migrated.close();
 });
 
@@ -214,38 +232,83 @@ test("schema v4 migration removes the legacy goal budget column", () => {
   assert.equal("budget" in migrated.goal("legacy")!, false);
   const columns = (migrated.db.prepare("PRAGMA table_info(goals)").all() as Array<{ name: string }>).map((row) => row.name);
   assert.equal(columns.includes("budget"), false);
-  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 7);
+  assert.equal((migrated.db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version, 8);
   migrated.close();
 });
 
 test("goal parent cannot be changed during an update", () => {
   const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
-  ledger.putGoal({ id: "p1", parentId: null, objective: "p1", owner: "owner", phase: "active", revision: 0 }, "human");
-  ledger.putGoal({ id: "p2", parentId: null, objective: "p2", owner: "other", phase: "active", revision: 0 }, "human");
-  ledger.putGoal({ id: "child", parentId: "p1", objective: "c", owner: "child", phase: "active", revision: 0 }, "owner");
-  assert.throws(() => ledger.putGoal({ id: "child", parentId: "p2", objective: "c", owner: "child", phase: "active", revision: 1 }, "owner"), /reparenting/);
+  ledger.putGoal({ id: "p1", parentId: null, objective: "p1", observationMethod: null, owner: "owner", phase: "active", revision: 0 }, "human");
+  ledger.putGoal({ id: "p2", parentId: null, objective: "p2", observationMethod: null, owner: "other", phase: "active", revision: 0 }, "human");
+  ledger.putGoal({ id: "child", parentId: "p1", objective: "c", observationMethod: "Verify the objective through an evidence-backed handoff.", owner: "child", phase: "active", revision: 0 }, "owner");
+  assert.throws(() => ledger.putGoal({ id: "child", parentId: "p2", objective: "c", observationMethod: "Verify the objective through an evidence-backed handoff.", owner: "child", phase: "active", revision: 1 }, "owner"), /reparenting/);
   ledger.close();
 });
 
 test("goal phases are constrained by both contract and SQLite", () => {
   const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
-  ledger.putGoal({ id: "root", parentId: null, objective: "ship", owner: "owner", phase: "active", revision: 0 }, "human");
-  ledger.putGoal({ id: "root", parentId: null, objective: "ship", owner: "owner", phase: "paused", revision: 1 }, "human");
-  ledger.putGoal({ id: "root", parentId: null, objective: "ship", owner: "owner", phase: "complete", revision: 2 }, "human");
-  assert.throws(() => ledger.putGoal({ id: "root", parentId: null, objective: "ship", owner: "owner", phase: "active", revision: 3 }, "human"), /invalid goal transition/);
+  const method = "Inspect a fresh shipping evidence event.";
+  ledger.putGoal({ id: "root", parentId: null, objective: "ship", observationMethod: method, owner: "owner", phase: "active", revision: 0 }, "human");
+  ledger.putGoal({ id: "root", parentId: null, objective: "ship", observationMethod: method, owner: "owner", phase: "paused", revision: 1 }, "human");
+  ledger.putGoal({ id: "root", parentId: null, objective: "ship", observationMethod: method, owner: "owner", phase: "active", revision: 2 }, "human");
+  const evidence = ledger.appendEvent(event("owner", "shipping.observed", { ok: true }));
+  ledger.completeGoal({ goalId: "root", revision: 2, reason: "shipping observation passed", evidence: [evidence.seq] }, "human");
+  assert.throws(() => ledger.putGoal({ id: "root", parentId: null, objective: "ship", observationMethod: method, owner: "owner", phase: "active", revision: 4 }, "human"), /completed goal/);
   assert.throws(() => ledger.db.prepare("UPDATE goals SET phase='active' WHERE id='root'").run(), /invalid goal transition/);
   ledger.close();
 });
 
 test("human root completion waits for every descendant to complete", () => {
   const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
-  ledger.putGoal({ id: "root", parentId: null, objective: "company", owner: "ceo", phase: "active", revision: 0 }, "human");
-  ledger.putGoal({ id: "child", parentId: "root", objective: "research", owner: "research", phase: "active", revision: 0 }, "ceo");
-  assert.throws(() => ledger.putGoal({ id: "root", parentId: null, objective: "company", owner: "ceo", phase: "complete", revision: 1 }, "human"), /descendants/);
-  assert.throws(() => ledger.putGoal({ id: "root", parentId: null, objective: "company", owner: "ceo", phase: "complete", revision: 1 }, "ceo"), /only human/);
-  ledger.putGoal({ id: "child", parentId: "root", objective: "research", owner: "research", phase: "complete", revision: 1 }, "ceo");
-  ledger.putGoal({ id: "root", parentId: null, objective: "company", owner: "ceo", phase: "complete", revision: 1 }, "human");
+  ledger.putGoal({ id: "root", parentId: null, objective: "company", observationMethod: "Inspect all child completion evidence.", owner: "ceo", phase: "active", revision: 0 }, "human");
+  ledger.putGoal({ id: "child", parentId: "root", objective: "research", observationMethod: "Verify the objective through an evidence-backed handoff.", owner: "research", phase: "active", revision: 0 }, "ceo");
+  const childEvidence = ledger.appendEvent(event("research", "research.observed", { complete: true }));
+  assert.throws(() => ledger.completeGoal({ goalId: "root", revision: 0, reason: "done", evidence: [childEvidence.seq] }, "human"), /descendants/);
+  assert.throws(() => ledger.completeGoal({ goalId: "root", revision: 0, reason: "done", evidence: [childEvidence.seq] }, "ceo"), /only human/);
+  ledger.completeGoal({ goalId: "child", revision: 0, reason: "research observed", evidence: [childEvidence.seq] }, "ceo");
+  const rootEvidence = ledger.appendEvent(event("ceo", "organization.observed", { complete: true }));
+  ledger.completeGoal({ goalId: "root", revision: 0, reason: "all descendants observed", evidence: [rootEvidence.seq] }, "human");
   assert.equal(ledger.goal("root")?.phase, "complete");
+  ledger.close();
+});
+
+test("Goal observation methods are durable, revisioned, and required for children", () => {
+  const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
+  ledger.putGoal({ id: "root", parentId: null, objective: "grow revenue", observationMethod: null, owner: "ceo", phase: "active", revision: 0 }, "human");
+  assert.equal(ledger.goal("root")?.observationMethod, null);
+  assert.throws(() => ledger.putGoal({ id: "child", parentId: "root", objective: "find baseline", observationMethod: null, owner: "analyst", phase: "active", revision: 0 }, "ceo"), /observation method/);
+  ledger.putGoal({ id: "root", parentId: null, objective: "grow net revenue", observationMethod: null, owner: "ceo", phase: "active", revision: 1 }, "human");
+  ledger.putGoal({ id: "root", parentId: null, objective: "grow net revenue", observationMethod: "Run the revenue report every six hours.", owner: "ceo", phase: "active", revision: 2 }, "human");
+  assert.throws(() => ledger.putGoal({ id: "root", parentId: null, objective: "grow gross revenue", observationMethod: "Run the revenue report every six hours.", owner: "ceo", phase: "active", revision: 3 }, "human"), /replace or invalidate/);
+  const before = ledger.goal("root");
+  ledger.rebuildProjections();
+  assert.deepEqual(ledger.goal("root"), before);
+  ledger.close();
+});
+
+test("Goal completion requires current-revision observation evidence", () => {
+  const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
+  const oldEvidence = ledger.appendEvent(event("human", "observation.old", { ok: true }));
+  ledger.putGoal({ id: "root", parentId: null, objective: "publish", observationMethod: "Inspect the published artifact and cite the observation.", owner: "ceo", phase: "active", revision: 0 }, "human");
+  assert.throws(() => ledger.completeGoal({ goalId: "root", revision: 0, reason: "old evidence", evidence: [oldEvidence.seq] }, "human"), /predates/);
+  assert.throws(() => ledger.completeGoal({ goalId: "root", revision: 1, reason: "stale revision", evidence: [oldEvidence.seq] }, "human"), /stale/);
+  const fresh = ledger.appendEvent(event("ceo", "artifact.observed", { published: true }));
+  const completed = ledger.completeGoal({ goalId: "root", revision: 0, reason: "artifact inspection passed", evidence: [fresh.seq] }, "human");
+  assert.equal(completed.phase, "complete");
+  assert.deepEqual((ledger.events().find((item) => item.type === "goal.completion_decided")?.data as { evidence: number[] }).evidence, [fresh.seq]);
+  ledger.close();
+});
+
+test("completion decision and Goal projection roll back together", () => {
+  let armed = false;
+  const ledger = new SqliteLedger(":memory:", { clock: new FixedClock(), faultInjector: () => { if (armed) throw new Error("kill during completion"); } });
+  ledger.putGoal({ id: "root", parentId: null, objective: "publish", observationMethod: "Inspect the published artifact.", owner: "ceo", phase: "active", revision: 0 }, "human");
+  const evidence = ledger.appendEvent(event("ceo", "artifact.observed", { published: true }));
+  const before = JSON.stringify(ledger.events());
+  armed = true;
+  assert.throws(() => ledger.completeGoal({ goalId: "root", revision: 0, reason: "artifact passed", evidence: [evidence.seq] }, "human"), /kill during completion/);
+  assert.equal(JSON.stringify(ledger.events()), before);
+  assert.equal(ledger.goal("root")?.phase, "active");
   ledger.close();
 });
 
@@ -254,19 +317,19 @@ test("delegation atomically commits its fact, child goal, decision mail, and wak
     let armed = false;
     let calls = 0;
     const ledger = new SqliteLedger(":memory:", { clock: new FixedClock(), faultInjector: () => { if (armed && ++calls === failAt) throw new Error(`kill delegation ${failAt}`); } });
-    ledger.putGoal({ id: "root", parentId: null, objective: "operate", owner: "ceo", phase: "active", revision: 0 }, "human");
+    ledger.putGoal({ id: "root", parentId: null, objective: "operate", observationMethod: null, owner: "ceo", phase: "active", revision: 0 }, "human");
     const evidence = ledger.appendEvent(event("ceo", "observation", { fact: true }));
     const before = JSON.stringify({ events: ledger.events(), goals: ledger.goals(), mail: ledger.mailbox(), wakes: ledger.wakes() });
     armed = true;
-    assert.throws(() => ledger.commitDelegation({ id: "d1", parentGoalId: "root", childGoal: { id: "research", objective: "research market", owner: "researcher" }, brief: { deliverable: "report" }, reason: "independent evidence boundary", evidence: [evidence.seq] }, "ceo"), /kill delegation/);
+    assert.throws(() => ledger.commitDelegation({ id: "d1", parentGoalId: "root", childGoal: { id: "research", objective: "research market", observationMethod: "Verify the objective through an evidence-backed handoff.", owner: "researcher" }, brief: { deliverable: "report" }, reason: "independent evidence boundary", evidence: [evidence.seq] }, "ceo"), /kill delegation/);
     assert.equal(JSON.stringify({ events: ledger.events(), goals: ledger.goals(), mail: ledger.mailbox(), wakes: ledger.wakes() }), before, `fault point ${failAt}`);
     ledger.close();
   }
 
   const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
-  ledger.putGoal({ id: "root", parentId: null, objective: "operate", owner: "ceo", phase: "active", revision: 0 }, "human");
+  ledger.putGoal({ id: "root", parentId: null, objective: "operate", observationMethod: null, owner: "ceo", phase: "active", revision: 0 }, "human");
   const evidence = ledger.appendEvent(event("ceo", "observation", { fact: true }));
-  const request = { id: "d1", parentGoalId: "root", childGoal: { id: "research", objective: "research market", owner: "researcher" }, brief: { deliverable: "report" }, reason: "independent evidence boundary", evidence: [evidence.seq] };
+  const request = { id: "d1", parentGoalId: "root", childGoal: { id: "research", objective: "research market", observationMethod: "Verify the objective through an evidence-backed handoff.", owner: "researcher" }, brief: { deliverable: "report" }, reason: "independent evidence boundary", evidence: [evidence.seq] };
   const result = ledger.commitDelegation(request, "ceo");
   assert.equal(result.goal.parentId, "root");
   assert.equal(result.mail.level, "decision");
@@ -274,13 +337,16 @@ test("delegation atomically commits its fact, child goal, decision mail, and wak
   assert.equal(ledger.events().filter((item) => item.type === "delegation.created").length, 1);
   assert.deepEqual(ledger.commitDelegation(request, "ceo"), result);
   assert.throws(() => ledger.commitDelegation({ ...request, childGoal: { ...request.childGoal, owner: "other" } }, "ceo"), /reused/);
+  const beforeMissingMethod = JSON.stringify({ events: ledger.events(), goals: ledger.goals(), mail: ledger.mailbox(), wakes: ledger.wakes() });
+  assert.throws(() => ledger.commitDelegation({ ...request, id: "missing-method", childGoal: { ...request.childGoal, id: "missing", observationMethod: "" } }, "ceo"), /incomplete/);
+  assert.equal(JSON.stringify({ events: ledger.events(), goals: ledger.goals(), mail: ledger.mailbox(), wakes: ledger.wakes() }), beforeMissingMethod);
   ledger.close();
 });
 
 test("reassignment changes ownership, notifies both sides, and wakes only the new owner", () => {
   const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
-  ledger.putGoal({ id: "root", parentId: null, objective: "operate", owner: "ceo", phase: "active", revision: 0 }, "human");
-  ledger.putGoal({ id: "launch", parentId: "root", objective: "launch", owner: "old", phase: "active", revision: 0 }, "ceo");
+  ledger.putGoal({ id: "root", parentId: null, objective: "operate", observationMethod: null, owner: "ceo", phase: "active", revision: 0 }, "human");
+  ledger.putGoal({ id: "launch", parentId: "root", objective: "launch", observationMethod: "Verify the objective through an evidence-backed handoff.", owner: "old", phase: "active", revision: 0 }, "ceo");
   ledger.enqueueWake(wake("old-wake", "old"), "supervisor");
   const evidence = ledger.appendEvent(event("ceo", "observation", { blocked: true }));
   const request = { id: "r1", goalId: "launch", newOwner: "new", brief: { constraint: "recover" }, reason: "old owner blocked", evidence: [evidence.seq] };
@@ -297,7 +363,7 @@ test("reassignment changes ownership, notifies both sides, and wakes only the ne
 
 test("FTS searches event facts and actions keep payload policy external", () => {
   const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
-  ledger.putGoal({ id: "root", parentId: null, objective: "generic policy", owner: "a", phase: "active", revision: 0 }, "human");
+  ledger.putGoal({ id: "root", parentId: null, objective: "generic policy", observationMethod: null, owner: "a", phase: "active", revision: 0 }, "human");
   const evidence = ledger.appendEvent(event("a", "observation", { note: "uniquenebulafact" }));
   assert.equal(ledger.searchEvents("uniquenebulafact").map((event) => event.seq).includes(evidence.seq), true);
   ledger.requestAction({ ...action("generic", [evidence.seq]), payload: { domainSpecificPolicy: { quota: 60 } } }, "a");

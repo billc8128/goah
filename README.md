@@ -24,7 +24,7 @@ goah does not replace your agent runner (pi, or any runner that implements the `
 
 ## Status
 
-**Experimental.** Contracts are `0.4.0` / `experimental`. SQLite schema changes use explicit, version-checked migrations; public TypeScript contracts may still change before 1.0.
+**Experimental.** Contracts are `0.5.0` / `experimental`. SQLite schema changes use explicit, version-checked migrations; public TypeScript contracts may still change before 1.0.
 
 Implemented and tested today:
 
@@ -38,10 +38,12 @@ Implemented and tested today:
 - Runner-owned local execution: non-software goals need no Git, while coding agents can use ordinary Git and worktree commands through their skills
 - Real runner subprocess boundary with sliding lease renewal, process-group termination, optional runner-specific timeout, and stale-event rejection
 - Mail acknowledged atomically with a valid handoff; abnormal wakes leave messages unread for redelivery
-- Injected clocks, schema v1→v6 migration into schema v7, indexed bounded queries, and a public ledger conformance suite
+- Injected clocks, schema v1→v8 migrations, indexed bounded queries, and a public ledger conformance suite
 - Optional mechanical metric evaluation (missing/stale/sustain/guardrails), heartbeat escalation, trigger coalescing, FTS5 fact search, and generic evidence-backed actions; Goal itself has no required metric or target
-- Official Pi 0.84.2 worker binding with local file/bash tools and model-view-only mid-turn compaction
-- CEO sole-entry flow with automatic root wake, ledger-derived team roster, atomic delegation/reassignment, role-filtered Pi tools, motion validation, concurrent child agents, resident daemon loop, and a read-only team dashboard
+- Official Pi 0.84.2 worker binding with `read`, `write`, `edit`, and `bash` for every Agent plus model-view-only mid-turn compaction
+- Durable textual Goal observation methods with root human confirmation, atomic child assignment, revision invalidation, replay, and evidence-backed completion
+- Interactive `goah` CEO shell over a resident Supervisor local control socket, including live goal revisions while Supervisor remains the only SQLite writer
+- CEO sole-entry flow with automatic root wake, filesystem-first onboarding, ledger-derived team roster, atomic delegation/reassignment, stale-child action barriers, motion validation, concurrent child agents, and a read-only team dashboard
 - Session verifier plus blind-first global audit interfaces, audit-advice delivery, and precision/risk-weighted-recall evaluation
 - Repo-guardian reference application, systemd/launchd templates, and an accelerated 30-day replay/continuity soak
 - Bidirectional fenced RPC with role capabilities, executable CEO/verifier/audit prompts, versioned configuration, and singleton CLI controls
@@ -60,7 +62,7 @@ Requires Node.js >= 24 (uses `node:sqlite`).
 git clone https://github.com/billc8128/goah.git
 cd goah
 npm install
-npm test          # 64 contract, replay, organization, transaction-fault, recovery, approval, audit, and connector tests
+npm test          # 71 contract, replay, organization, observation, control-socket, recovery, approval, audit, and connector tests
 npm run example   # one full wake: goal → schedule → lease → faux run → handoff → done
 npm run example:guardian
 npm run test:soak
@@ -72,25 +74,24 @@ Initialize and operate a configured supervisor:
 npm install --save-dev @goah/cli
 npx goah init --provider anthropic --model claude-sonnet-4-6
 npx goah doctor
-npx goah goal start --objective "Launch a profitable store"
-npx goah ceo status
-npx goah ceo send --message "Prioritize low inventory risk"
-npx goah start
+npx goah "Launch a profitable store"
+# Reattach later:
+npx goah --continue
 ```
 
 The normal product flow is one human objective through CEO. Lower-level Goal controls remain available for inspection, extensions, and human root authority:
 
 ```bash
-npx goah goal-create --id first-goal --owner worker --objective "Complete the first verified handoff" --wake-now
+npx goah goal-create --id first-goal --owner worker --objective "Complete the first verified handoff" --observation-method "Inspect a fresh evidence-backed handoff" --wake-now
 npx goah goal-show first-goal
-npx goah goal-update first-goal --objective "Updated objective"
+npx goah goal-update first-goal --objective "Updated objective" --observation-method "Inspect evidence for the updated objective"
 npx goah goal-pause first-goal
 npx goah goal-resume first-goal
-npx goah goal-complete first-goal
+npx goah goal-complete first-goal --reason "observation passed" --evidence <seq>
 npx goah status
 ```
 
-`goah start` runs the resident supervisor after the one-shot path is healthy. `goah wake <agent>` queues a manual wake. Provider credentials stay as `env:NAME` references in `goah.config.json`; `doctor` resolves and validates them without printing them. For an offline installation check, use `goah init --provider faux`.
+`goah` starts the resident Supervisor when necessary and attaches the interactive CEO. `/goal ...` revises the active root and invalidates its old observation method; `/observe ...` confirms the replacement through human authority. `goah start` remains the explicit daemon command and `goah wake <agent>` queues a manual wake. Provider credentials stay as `env:NAME` references in `goah.config.json`; `doctor` resolves and validates them without printing them. For an offline installation check, use `goah init --provider faux`.
 
 Inspect and export the replayable Session ledger without requiring provider credentials:
 
@@ -176,7 +177,7 @@ Read this before pointing goah at anything real.
 Mechanically enforced today:
 
 - No external side effects by default: a connector must declare a capability for an action's kind, and non-dry-run connectors additionally require an explicit supervisor opt-in. Anything undeclared is gated, fail-closed.
-- Runner and connector code executes in child processes with minimal environments. Connector secrets are explicitly scoped to that connector; runners never receive a ledger connection. Control state defaults to `~/.goah/state`, outside the runner root.
+- Runner and connector code executes in child processes with bounded environments. Connector secrets are explicitly scoped to that connector; runners never receive a ledger connection. Pi's Bash subprocess receives a minimal utility environment rather than provider API-key variables. Control state defaults to `~/.goah/state`, outside the runner root.
 - The events table is append-only (enforced by SQLite triggers); invalid wake/action state transitions are rejected by both the library and the database.
 - `request.prepared` records model-visible behavior but excludes provider API keys, authorization headers, abort handles, and transport-private objects.
 - Recovery Active Context includes only the abnormal reason, interrupted/compaction markers, and tool calls with unknown outcomes; raw deltas and request snapshots remain in the ledger for explicit inspection.
@@ -188,25 +189,25 @@ Not guaranteed, by design honesty:
 
 - goah does not make the model's judgment correct. It records reasons and evidence; it cannot verify they are good reasons.
 - goah does not defend against prompt injection inside the agent's own context.
-- A runner with bash enabled is trusted local code and has the operating-system permissions of the user that launched it. GOAH does not sandbox arbitrary shell commands.
+- The Pi runner is trusted local code: every Agent has Bash and the operating-system permissions of the user that launched it. GOAH does not sandbox arbitrary shell commands.
 
 ## Architecture status
 
 | Milestone | Scope |
 |---|---|
-| v2 ledger kernel | ✅ stream-aware event schema, required/ignorable events, SQLite v1–v7 migration, transaction fault injection |
+| v2 ledger kernel | ✅ stream-aware event schema, required/ignorable events, SQLite v1–v8 migration, transaction fault injection |
 | replayable Session | ✅ format v1, legacy upgrader, normalized Pi messages/tools/requests, compaction facts, replay and interrupted-tool repair |
 | Active Context | ✅ deterministic Markdown composition with evidence source sequences |
 | execution modules | ✅ Goal/Wake/Schedule/Mailbox/Action/Handoff contracts are layered above the generic kernel; further physical package splitting is intentionally deferred |
 | 2 — narrow closed loop | ✅ repo-guardian implementation complete; real unattended 14-day run still operational evidence |
 | 3 — verification layer | ✅ verifier/global-audit interfaces, blind-first isolation and evaluation implemented; production calibration dataset remains operational work |
-| 4 — multi-agent | ✅ CEO sole entry, ledger-derived roster, atomic delegation/reassignment, motion validation, concurrent child agents, mailbox and dashboard |
+| 4 — multi-agent | ✅ interactive CEO, durable observation methods, ledger-derived roster, atomic delegation/reassignment, revision barriers, concurrent child agents, mailbox and dashboard |
 
 ## Design
 
 The current architecture document (Chinese) is [`Goah-架构设计-v2.html`](./Goah-架构设计-v2.html). [`北辰-harness-设计稿.html`](./北辰-harness-设计稿.html) is preserved as the historical v0.10 proposal and links forward to v2. Decisions are recorded as ADRs in [`docs/adr/`](./docs/adr/).
 
-The user-facing organization layer is documented in [`Goah-CEO-Agent-Operating-Layer.html`](./Goah-CEO-Agent-Operating-Layer.html), with the reviewable Markdown source in [`docs/proposals/ceo-agent-operating-layer.md`](./docs/proposals/ceo-agent-operating-layer.md). Milestones A–C are implemented: CEO is the sole normal entry, team state is derived from ledger facts, delegation/reassignment is atomic, the default operating policy is built in, and `goah goal start` launches the organization. The deterministic multi-Agent canary is covered by the test suite; a long-running real-model canary remains operational validation.
+The user-facing organization layer is documented in [`Goah-CEO-Agent-Operating-Layer.html`](./Goah-CEO-Agent-Operating-Layer.html), with the reviewable Markdown source in [`docs/proposals/ceo-agent-operating-layer.md`](./docs/proposals/ceo-agent-operating-layer.md). Milestones A–C and E are implemented: CEO is the interactive normal entry, every Agent receives the Pi coding baseline, Goal observation methods persist across wakes, team state is derived from Ledger facts, and delegation/reassignment is atomic. The deterministic multi-Agent canary is covered by the test suite; a long-running real-model canary remains operational validation.
 
 ## Contributing
 

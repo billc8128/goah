@@ -26,7 +26,7 @@ await runProcessWorker(async (request, emit, rpc): Promise<RunnerResult> => {
       writeFileSync(path, step.write.content);
     }
     for (const trace of step.trace ?? []) emit(trace);
-    if (step.rpc) emit({ type: "runner.rpc.result", data: await rpc(step.rpc.method, step.rpc.params) });
+    if (step.rpc) emit({ type: "runner.rpc.result", data: await rpc(step.rpc.method, resolveParams(step.rpc.params, request.context)) });
     if (step.crash) throw new Error(step.crash);
     if (step.delayMs) await new Promise((resolve) => setTimeout(resolve, step.delayMs));
     if (step.hang) await new Promise(() => undefined);
@@ -34,3 +34,17 @@ await runProcessWorker(async (request, emit, rpc): Promise<RunnerResult> => {
   }
   return { outcome: "abnormal", reason: "faux worker stopped without handoff" };
 });
+
+function resolveParams(value: JsonValue, context: JsonValue): JsonValue {
+  const sourceSeqs = context && typeof context === "object" && !Array.isArray(context) && Array.isArray(context.sourceSeqs)
+    ? context.sourceSeqs.filter((item): item is number => typeof item === "number")
+    : [];
+  const latest = Math.max(0, ...sourceSeqs);
+  const visit = (item: JsonValue): JsonValue => {
+    if (item === "$LATEST_SOURCE_SEQ") return latest;
+    if (Array.isArray(item)) return item.map(visit);
+    if (item && typeof item === "object") return Object.fromEntries(Object.entries(item).map(([key, nested]) => [key, visit(nested)]));
+    return item;
+  };
+  return visit(value);
+}
