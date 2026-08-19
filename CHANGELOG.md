@@ -2,6 +2,10 @@
 
 ## 0.4.0
 
+- Added the CEO Agent Operating Layer as the sole normal user entry: `goal start`, `ceo send/status/inbox/approve`, automatic CEO wakes, and a built-in operating policy.
+- Added ledger-derived team rosters and role-filtered Pi tools for atomic delegation, reassignment, child lifecycle control, and human decision requests.
+- Delegation now commits its event, child Goal, decision mail, and queued Wake in one SQLite transaction; reassignment is idempotent and suppresses stale owner motion.
+- Added CEO motion validation, child material/blocker/exhaustion triggers, root-completion descendant checks, recovery injection, and a deterministic two-child organization canary.
 - Added revisioned Goal show/update/pause/resume/complete commands and mechanical phase transitions.
 - Added Session format v1, an in-memory v0 upgrader, future-version refusal, and required-vs-ignorable unknown event semantics.
 - SQLite schema v7 persists the event `ignorable` marker and enforces Goal phases in SQL.

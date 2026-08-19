@@ -9,15 +9,43 @@ export interface ScheduleSnapshot { id: string; agent: string; nextWakeAt: strin
 export interface WakeSnapshot { id: string; agent: string; triggerRef: string; status: WakeStatus; leaseUntil: string | null; attempt: number; startedAt: string | null; endedAt: string | null; enqueuedSeq: number; leaseToken: string | null; runnerPid: number | null }
 export type MailLevel = "fyi" | "decision" | "emergency";
 export interface MailSnapshot { id: string; to: string; from: string; level: MailLevel; body: JsonValue; readAt: string | null }
+export interface DelegationRequest {
+  id: string;
+  parentGoalId: string;
+  childGoal: { id: string; objective: string; owner: string };
+  brief: JsonValue;
+  reason: string;
+  evidence: number[];
+}
+export interface DelegationResult { delegationId: string; goal: GoalSnapshot; mail: MailSnapshot; wake: WakeSnapshot }
+export interface ReassignmentRequest {
+  id: string;
+  goalId: string;
+  newOwner: string;
+  brief: JsonValue;
+  reason: string;
+  evidence: number[];
+}
+export interface ReassignmentResult { reassignmentId: string; goal: GoalSnapshot; mail: MailSnapshot[]; wake: WakeSnapshot }
+export type TeamMemberStatus = "running" | "queued" | "scheduled" | "waiting" | "blocked" | "idle_unplanned" | "retired";
+export interface TeamMemberView {
+  agent: string;
+  goalIds: string[];
+  status: TeamMemberStatus;
+  lastHandoffSeq: number | null;
+  lastWakeStatus: WakeStatus | null;
+  nextWakeAt: string | null;
+}
 export interface AuditAdvice { by: string; at: string; body: JsonValue; evidence: number[] }
 export interface ActionSnapshot { id: string; agent: string; kind: string; connector: string; payload: JsonValue; reason: string; evidence: number[]; gated: boolean; status: ActionStatus; reconciledAt: string | null; externalRef: string | null; auditAdvice: AuditAdvice | null; adviceAcked: boolean }
-export interface Handoff { observations: string[]; results: string[]; nextSteps: string[]; blocker?: string }
+export interface Handoff { observations: string[]; results: string[]; nextSteps: string[]; blocker?: string; material?: boolean }
 export interface MailDraft { to: string; level: MailLevel; body: JsonValue }
 export interface WakeOutput { handoff: Handoff; mail: MailDraft[]; nextWakeAt: string | null }
 export interface RunnerTraceEvent { type: string; data: JsonValue }
 
 export type AgentRole = "child" | "ceo" | "verifier" | "audit";
-export type AgentCapability = "ledger.search" | "mail.send" | "schedule.set" | "action.submit" | "audit.ack" | "audit.write" | "goal.put";
+export type AgentCapability = "ledger.search" | "mail.send" | "schedule.set" | "action.submit" | "audit.ack" | "audit.write" | "goal.put"
+  | "team.list" | "goal.delegate" | "goal.reassign" | "goal.pause" | "goal.resume" | "goal.complete" | "human.request";
 export interface AgentProfile { agent: string; role: AgentRole; capabilities?: AgentCapability[]; systemPrompt?: string }
 export interface RunRequest { wake: WakeSnapshot; context: JsonValue; now(): string; emit(event: RunnerTraceEvent): void; rpc?(method: AgentCapability, params: JsonValue): Promise<JsonValue> }
 export type RunnerResult = { outcome: "handoff"; output: WakeOutput } | { outcome: "abnormal"; reason: string };
@@ -34,6 +62,8 @@ export interface HandoffCommit { agent: string; wakeId: string; ts: string; outp
 /** Standard execution modules composed on top of the generic event store. */
 export interface Ledger extends EventStore {
   putGoal(goal: GoalSnapshot, actor: string, wakeId?: string): EventRecord;
+  commitDelegation(request: DelegationRequest, actor: string, wakeId?: string): DelegationResult;
+  commitReassignment(request: ReassignmentRequest, actor: string, wakeId?: string): ReassignmentResult;
   putSchedule(schedule: ScheduleSnapshot, actor: string, wakeId?: string): EventRecord;
   enqueueWake(wake: WakeSnapshot, actor: string): { event: EventRecord; created: boolean };
   claimNextWake(now: string, leaseUntil: string, leaseToken: string): WakeSnapshot | null;

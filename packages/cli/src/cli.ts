@@ -3,7 +3,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createRuntime, diagnoseConfig, exportSession, listSessions, loadConfig, replayWakeSession, showSession, showSessionContext, statusSnapshot, streamEvents, SupervisorLock, type PiProvider, writeDefaultConfig } from "./index.js";
 
-const args = process.argv.slice(2);
+const args = normalizeArgs(process.argv.slice(2));
 
 try {
   await main();
@@ -31,7 +31,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const config = loadConfig(configPath, { resolveSecrets: ["start", "run-once", "approve"].includes(command) });
+  const config = loadConfig(configPath, { resolveSecrets: ["start", "run-once", "approve", "ceo-approve"].includes(command) });
   if (command === "doctor") {
     const result = diagnoseConfig(config);
     console.log(JSON.stringify(result, null, 2));
@@ -58,6 +58,19 @@ async function main(): Promise<void> {
       console.log(JSON.stringify({ wake }, null, 2));
     } else if (command === "status") {
       console.log(JSON.stringify(statusSnapshot(ledger), null, 2));
+    } else if (command === "goal-start") {
+      console.log(JSON.stringify(supervisor.startGoal(required("--objective"), option("--id") ?? undefined), null, 2));
+    } else if (command === "ceo-send") {
+      console.log(JSON.stringify(supervisor.sendToCeo({ message: required("--message") }, "decision"), null, 2));
+    } else if (command === "ceo-status") {
+      console.log(JSON.stringify({
+        roots: ledger.goals().filter((goal) => goal.parentId === null && goal.owner === "ceo"),
+        team: supervisor.teamList(),
+        pendingHuman: ledger.unreadMail("human"),
+        recentCeoHandoffs: ledger.eventsSince(0, ["handoff.recorded"]).filter((event) => event.actor === "ceo").slice(-10),
+      }, null, 2));
+    } else if (command === "ceo-inbox") {
+      console.log(JSON.stringify(ledger.unreadMail("human"), null, 2));
     } else if (command === "session") {
       const subcommand = requiredPositional(1, "session command");
       if (subcommand === "list") console.log(JSON.stringify(listSessions(ledger), null, 2));
@@ -96,7 +109,7 @@ async function main(): Promise<void> {
       const phase = command === "goal-pause" ? "paused" : command === "goal-resume" ? "active" : "complete";
       console.log(JSON.stringify({ goal: supervisor.transitionGoal(requiredPositional(1, "goal id"), phase, option("--actor") ?? "human") }, null, 2));
     } else if (command === "action-list") console.log(JSON.stringify(ledger.actions(), null, 2));
-    else if (command === "approve") console.log(JSON.stringify(await supervisor.approveAction(requiredPositional(1, "action id"), option("--actor") ?? "human", required("--reason"), evidence()), null, 2));
+    else if (command === "approve" || command === "ceo-approve") console.log(JSON.stringify(await supervisor.approveAction(requiredPositional(1, "action id"), option("--actor") ?? "human", required("--reason"), evidence()), null, 2));
     else if (command === "reject") console.log(JSON.stringify(supervisor.rejectAction(requiredPositional(1, "action id"), option("--actor") ?? "human", required("--reason"), evidence()), null, 2));
     else if (command === "dashboard") { const path = option("--output") ?? join(config.stateDir, "status.html"); writeFileSync(path, (await import("goah-supervisor")).renderDashboard(ledger)); console.log(path); }
     else throw new Error(`unknown command: ${command}`);
@@ -113,6 +126,10 @@ async function run(supervisor: ReturnType<typeof createRuntime>["supervisor"], s
 function printHelp(): void {
   console.log(`goah init [--provider anthropic|openai|ark-coding|faux] [--model ID]
 goah doctor
+goah goal start --objective TEXT [--id ID]
+goah ceo send --message TEXT
+goah ceo status | ceo inbox
+goah ceo approve ACTION_ID --reason TEXT --evidence SEQ[,SEQ]
 goah goal-create --id ID --owner AGENT --objective TEXT [--wake-now]
 goah goal-show ID | goal-list
 goah goal-update ID [--objective TEXT] [--owner AGENT] [--actor ACTOR]
@@ -147,4 +164,8 @@ function providerOption(value: string): PiProvider {
   if (!["anthropic", "openai", "ark-coding", "faux"].includes(value)) throw new Error(`unsupported provider: ${value}`);
   return value as PiProvider;
 }
-function mutates(command: string): boolean { return ["start", "run-once", "wake", "goal-create", "goal-update", "goal-pause", "goal-resume", "goal-complete", "approve", "reject"].includes(command); }
+function mutates(command: string): boolean { return ["start", "run-once", "wake", "goal-start", "ceo-send", "ceo-approve", "goal-create", "goal-update", "goal-pause", "goal-resume", "goal-complete", "approve", "reject"].includes(command); }
+function normalizeArgs(values: string[]): string[] {
+  if ((values[0] === "goal" || values[0] === "ceo") && values[1] && !values[1].startsWith("--")) return [`${values[0]}-${values[1]}`, ...values.slice(2)];
+  return values;
+}

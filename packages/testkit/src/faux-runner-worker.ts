@@ -15,7 +15,10 @@ interface WorkerStep {
 
 await runProcessWorker(async (request, emit, rpc): Promise<RunnerResult> => {
   if (process.env.GOAH_FAUX_CONTEXT_FILE) writeFileSync(process.env.GOAH_FAUX_CONTEXT_FILE, JSON.stringify(request.context));
-  const steps = JSON.parse(process.env.GOAH_FAUX_STEPS ?? "[]") as WorkerStep[];
+  const byAgent = JSON.parse(process.env.GOAH_FAUX_STEPS_BY_AGENT ?? "{}") as Record<string, WorkerStep[]>;
+  const byTrigger = JSON.parse(process.env.GOAH_FAUX_STEPS_BY_TRIGGER ?? "{}") as Record<string, WorkerStep[]>;
+  const triggerSteps = Object.entries(byTrigger).find(([prefix]) => request.wake.triggerRef.startsWith(prefix))?.[1];
+  const steps = triggerSteps ?? byAgent[request.wake.agent] ?? JSON.parse(process.env.GOAH_FAUX_STEPS ?? "[]") as WorkerStep[];
   for (const step of steps) {
     if (step.write) {
       const path = join(process.cwd(), step.write.path);

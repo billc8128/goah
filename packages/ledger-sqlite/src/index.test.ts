@@ -237,6 +237,64 @@ test("goal phases are constrained by both contract and SQLite", () => {
   ledger.close();
 });
 
+test("human root completion waits for every descendant to complete", () => {
+  const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
+  ledger.putGoal({ id: "root", parentId: null, objective: "company", owner: "ceo", phase: "active", revision: 0 }, "human");
+  ledger.putGoal({ id: "child", parentId: "root", objective: "research", owner: "research", phase: "active", revision: 0 }, "ceo");
+  assert.throws(() => ledger.putGoal({ id: "root", parentId: null, objective: "company", owner: "ceo", phase: "complete", revision: 1 }, "human"), /descendants/);
+  assert.throws(() => ledger.putGoal({ id: "root", parentId: null, objective: "company", owner: "ceo", phase: "complete", revision: 1 }, "ceo"), /only human/);
+  ledger.putGoal({ id: "child", parentId: "root", objective: "research", owner: "research", phase: "complete", revision: 1 }, "ceo");
+  ledger.putGoal({ id: "root", parentId: null, objective: "company", owner: "ceo", phase: "complete", revision: 1 }, "human");
+  assert.equal(ledger.goal("root")?.phase, "complete");
+  ledger.close();
+});
+
+test("delegation atomically commits its fact, child goal, decision mail, and wake", () => {
+  for (const failAt of [1, 2, 3, 4]) {
+    let armed = false;
+    let calls = 0;
+    const ledger = new SqliteLedger(":memory:", { clock: new FixedClock(), faultInjector: () => { if (armed && ++calls === failAt) throw new Error(`kill delegation ${failAt}`); } });
+    ledger.putGoal({ id: "root", parentId: null, objective: "operate", owner: "ceo", phase: "active", revision: 0 }, "human");
+    const evidence = ledger.appendEvent(event("ceo", "observation", { fact: true }));
+    const before = JSON.stringify({ events: ledger.events(), goals: ledger.goals(), mail: ledger.mailbox(), wakes: ledger.wakes() });
+    armed = true;
+    assert.throws(() => ledger.commitDelegation({ id: "d1", parentGoalId: "root", childGoal: { id: "research", objective: "research market", owner: "researcher" }, brief: { deliverable: "report" }, reason: "independent evidence boundary", evidence: [evidence.seq] }, "ceo"), /kill delegation/);
+    assert.equal(JSON.stringify({ events: ledger.events(), goals: ledger.goals(), mail: ledger.mailbox(), wakes: ledger.wakes() }), before, `fault point ${failAt}`);
+    ledger.close();
+  }
+
+  const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
+  ledger.putGoal({ id: "root", parentId: null, objective: "operate", owner: "ceo", phase: "active", revision: 0 }, "human");
+  const evidence = ledger.appendEvent(event("ceo", "observation", { fact: true }));
+  const request = { id: "d1", parentGoalId: "root", childGoal: { id: "research", objective: "research market", owner: "researcher" }, brief: { deliverable: "report" }, reason: "independent evidence boundary", evidence: [evidence.seq] };
+  const result = ledger.commitDelegation(request, "ceo");
+  assert.equal(result.goal.parentId, "root");
+  assert.equal(result.mail.level, "decision");
+  assert.equal(result.wake.status, "queued");
+  assert.equal(ledger.events().filter((item) => item.type === "delegation.created").length, 1);
+  assert.deepEqual(ledger.commitDelegation(request, "ceo"), result);
+  assert.throws(() => ledger.commitDelegation({ ...request, childGoal: { ...request.childGoal, owner: "other" } }, "ceo"), /reused/);
+  ledger.close();
+});
+
+test("reassignment changes ownership, notifies both sides, and wakes only the new owner", () => {
+  const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
+  ledger.putGoal({ id: "root", parentId: null, objective: "operate", owner: "ceo", phase: "active", revision: 0 }, "human");
+  ledger.putGoal({ id: "launch", parentId: "root", objective: "launch", owner: "old", phase: "active", revision: 0 }, "ceo");
+  ledger.enqueueWake(wake("old-wake", "old"), "supervisor");
+  const evidence = ledger.appendEvent(event("ceo", "observation", { blocked: true }));
+  const request = { id: "r1", goalId: "launch", newOwner: "new", brief: { constraint: "recover" }, reason: "old owner blocked", evidence: [evidence.seq] };
+  const result = ledger.commitReassignment(request, "ceo");
+  assert.equal(result.goal.owner, "new");
+  assert.equal(result.goal.revision, 1);
+  assert.deepEqual(result.mail.map((item) => item.to), ["old", "new"]);
+  assert.equal(result.wake.agent, "new");
+  assert.equal(ledger.wakes().some((item) => item.agent === "old" && item.status === "queued"), false);
+  assert.equal(ledger.wake("old-wake")?.status, "abnormal");
+  assert.deepEqual(ledger.commitReassignment(request, "ceo"), result);
+  ledger.close();
+});
+
 test("FTS searches event facts and actions keep payload policy external", () => {
   const ledger = new SqliteLedger(":memory:", { clock: new FixedClock() });
   ledger.putGoal({ id: "root", parentId: null, objective: "generic policy", owner: "a", phase: "active", revision: 0 }, "human");

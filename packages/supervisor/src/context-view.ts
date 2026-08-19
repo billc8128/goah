@@ -1,7 +1,8 @@
-import type { ActionSnapshot, AgentRole, EventRecord, GoalSnapshot, JsonValue, MailSnapshot, WakeSnapshot } from "goah-ledger-contract";
+import type { ActionSnapshot, AgentCapability, AgentRole, EventRecord, GoalSnapshot, JsonValue, MailSnapshot, TeamMemberView, WakeSnapshot } from "goah-ledger-contract";
 
 export interface ActiveContextView {
   role: AgentRole;
+  capabilities: AgentCapability[];
   systemPrompt: string;
   text: string;
   sourceSeqs: number[];
@@ -9,6 +10,7 @@ export interface ActiveContextView {
 
 export interface ActiveContextInput {
   role: AgentRole;
+  capabilities: AgentCapability[];
   systemPrompt: string;
   wake: WakeSnapshot;
   goals: GoalSnapshot[];
@@ -16,6 +18,7 @@ export interface ActiveContextInput {
   actions: ActionSnapshot[];
   lastHandoff: EventRecord | null;
   teamHandoffs: EventRecord[];
+  team: TeamMemberView[];
   recoveryEvents: EventRecord[];
 }
 
@@ -23,7 +26,7 @@ export interface ActiveContextInput {
 export function selectRecoveryEvents(events: EventRecord[]): EventRecord[] {
   const unknownCalls = new Set(events.filter((event) => event.type === "tool.completed" && field(field(event.data, "result"), "outcome") === "unknown").map((event) => String(field(event.data, "callId"))));
   return events.filter((event) => {
-    if (["wake.abnormal_reason", "session.interrupted", "context.compacted"].includes(event.type)) return true;
+    if (["wake.abnormal_reason", "session.interrupted", "context.compacted", "ceo.motion_invalid"].includes(event.type)) return true;
     if (event.type === "tool.called") return unknownCalls.has(String(field(event.data, "callId")));
     if (event.type === "tool.completed") return unknownCalls.has(String(field(event.data, "callId")));
     return false;
@@ -51,11 +54,12 @@ export function composeActiveContext(input: ActiveContextInput): ActiveContextVi
     ["Next", lines(handoff?.nextSteps)],
     ["Incoming", input.mail.map((mail) => `- [${mail.level}] from ${mail.from}: ${render(mail.body)}`)],
     ["External actions", input.actions.filter((action) => !["confirmed", "failed"].includes(action.status)).map((action) => `- ${action.id}: ${action.kind} — ${action.status}`)],
+    ["Team motion", input.team.map((member) => `- ${member.agent}: ${member.status}; goals=${member.goalIds.join(",") || "none"}; next=${member.nextWakeAt ?? "none"}; handoff=${member.lastHandoffSeq ?? "none"}`)],
     ["Team handoffs", input.teamHandoffs.map((event) => `- ${event.actor}: ${render(event.data)} [event:${event.seq}]`)],
     ["Recovery", input.recoveryEvents.map((event) => `- ${event.type}: ${render(event.data)} [event:${event.seq}]`)],
   ];
   const text = sections.filter(([, values]) => values.length > 0).map(([title, values]) => `# ${title}\n\n${values.join("\n")}`).join("\n\n");
-  return { role: input.role, systemPrompt: input.systemPrompt, text, sourceSeqs: [...sourceSeqs].sort((a, b) => a - b) };
+  return { role: input.role, capabilities: input.capabilities, systemPrompt: input.systemPrompt, text, sourceSeqs: [...sourceSeqs].sort((a, b) => a - b) };
 }
 
 function lines(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string").map((item) => `- ${item}`) : []; }

@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Goah — CEO Agent Operating Layer</title>
+<style>
+:root{
+  --bg:#f5f7f9;--paper:#fff;--surface:#f7f9fb;--ink:#17212b;--muted:#5f6c79;
+  --subtle:#66727e;--line:#d8dee5;--line-strong:#b9c3cd;--accent:#245da8;
+  --accent-soft:#edf4fc;--success:#287a4b;--warning:#946200;--danger:#b33b32;
+  --body:-apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",Arial,"PingFang SC","Microsoft YaHei",sans-serif;
+  --mono:"SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#11161c;--paper:#171d24;--surface:#1d242c;--ink:#e7ebef;--muted:#a8b1bb;
+  --subtle:#a1abb5;--line:#303944;--line-strong:#485563;--accent:#78a9e8;
+  --accent-soft:#172942;--success:#6fc38d;--warning:#e0b35b;--danger:#e88379;
+}}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.72 var(--body);text-rendering:optimizeLegibility}
+a{color:var(--accent);text-underline-offset:3px}
+.shell{width:min(1280px,100%);margin:0 auto;display:grid;grid-template-columns:248px minmax(0,1fr);min-height:100vh;background:var(--paper);border-inline:1px solid var(--line)}
+.rail{position:sticky;top:0;height:100vh;padding:34px 28px;border-right:1px solid var(--line);background:var(--surface);display:flex;flex-direction:column}
+.brand{color:var(--ink);font:700 21px/1 var(--body);letter-spacing:-.02em;text-decoration:none}.brand span{color:inherit}
+.rail-kicker{margin-top:12px;color:var(--subtle);font:10px/1.55 var(--mono);letter-spacing:.06em;text-transform:uppercase}
+.rail nav{margin-top:40px;display:grid;gap:2px}
+.rail nav a{position:relative;padding:8px 8px 8px 30px;border-left:2px solid transparent;color:var(--muted);font-size:13px;text-decoration:none}
+.rail nav a::before{content:attr(data-id);position:absolute;left:8px;top:9px;color:var(--subtle);font:10px var(--mono)}
+.rail nav a:hover,.rail nav a:focus-visible,.rail nav a.active{border-left-color:var(--accent);background:var(--accent-soft);color:var(--ink)}
+.rail-bottom{margin-top:auto;display:grid;gap:8px}.rail-bottom a{font-size:12px;text-decoration:none}.signal{color:var(--success);font:11px var(--mono)}.signal::before{content:"●";margin-right:7px}
+.content{min-width:0}
+.hero{padding:72px clamp(48px,7vw,88px) 62px;border-bottom:1px solid var(--line)}
+.hero-copy{max-width:860px}.overline{margin-bottom:18px;color:var(--accent);font:600 12px var(--mono);letter-spacing:.06em;text-transform:uppercase}
+.hero h1{max-width:780px;margin:0 0 24px;font:700 clamp(38px,5vw,54px)/1.12 var(--body);letter-spacing:-.035em}.hero h1 span{display:block;margin-top:10px;color:var(--muted);font-size:.48em;font-weight:500;letter-spacing:-.01em}
+.hero-lead{max-width:760px;margin:0;color:var(--muted);font-size:18px;line-height:1.75}.hero-lead strong{color:var(--ink)}
+.hero-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:30px}.chip{padding:5px 9px;border:1px solid var(--line-strong);border-radius:3px;color:var(--muted);font:11px var(--mono)}.chip.hot{border-color:var(--success);background:color-mix(in srgb,var(--success) 8%,transparent);color:var(--success)}
+.thesis{max-width:760px;margin-top:30px;padding:14px 16px;border-left:3px solid var(--accent);background:var(--accent-soft);color:var(--muted);font-size:14px}.thesis b{color:var(--accent);font:600 11px var(--mono)}
+.hero-system{display:none}
+.section{padding:62px clamp(48px,7vw,88px);border-bottom:1px solid var(--line)}
+.section-head{max-width:850px;margin-bottom:32px}.section-id{margin-bottom:7px;color:var(--accent);font:600 11px var(--mono);letter-spacing:.05em;text-transform:uppercase}
+.section h2{margin:0;font-size:30px;line-height:1.3;letter-spacing:-.02em}.section-intro{max-width:760px;margin:10px 0 0;color:var(--muted);font-size:16px}
+.terminal,.context-window{overflow:hidden;border:1px solid var(--line);border-radius:4px;background:var(--surface)}
+.terminal-bar,.context-window .top{display:flex;justify-content:space-between;align-items:center;padding:9px 13px;border-bottom:1px solid var(--line);color:var(--subtle);font:10px var(--mono)}
+pre{tab-size:2}.terminal pre,.context-window pre{margin:0;padding:18px 20px;overflow:auto;color:var(--ink);font:12px/1.7 var(--mono)}
+.authority{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:24px}.authority-lock{display:none}.authority-card{padding:20px;border:1px solid var(--line);border-radius:4px;background:var(--paper)}
+.authority-card .label{color:var(--accent);font:600 10px var(--mono);text-transform:uppercase}.authority-card h3{margin:8px 0 6px;font-size:18px}.authority-card p{margin:0;color:var(--muted)}
+.roster{border:1px solid var(--line);border-radius:4px;overflow:hidden}.roster-row{display:grid;grid-template-columns:130px 120px minmax(0,1fr) 55px;gap:16px;padding:12px 14px;border-bottom:1px solid var(--line);align-items:center}.roster-row:last-child{border:0}.roster-row.head{background:var(--surface);color:var(--subtle);font:10px var(--mono)}
+.roster-name{font:600 13px var(--mono)}.state{font:600 10px var(--mono);text-transform:uppercase}.state::before{content:"●";margin-right:6px}.running{color:var(--success)}.blocked{color:var(--danger)}.scheduled{color:var(--accent)}.idle{color:var(--warning)}.roster-desc{color:var(--muted)}.roster-rev{color:var(--subtle);font:10px var(--mono);text-align:right}
+.delegate-track{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:4px;overflow:hidden}.delegate-step{padding:18px;border-right:1px solid var(--line)}.delegate-step:last-child{border:0}.delegate-step .n{color:var(--accent);font:600 11px var(--mono)}.delegate-step h3{margin:8px 0 4px;font-size:16px}.delegate-step p{margin:0;color:var(--muted)}
+.atomic{margin-top:12px;color:var(--success);font:11px var(--mono)}.atomic::before{content:"Transactional guarantee · ";font-weight:700}
+.tool-grid{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:4px;overflow:hidden}.tool{display:grid;grid-template-columns:150px 1fr;gap:12px;padding:13px 15px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.tool:nth-child(2n){border-right:0}.tool code{color:var(--accent);font:12px var(--mono)}.tool span{color:var(--muted)}
+.policy-list{counter-reset:stage;border-top:1px solid var(--line)}.policy-stage{counter-increment:stage;display:grid;grid-template-columns:38px 190px 1fr;gap:16px;padding:16px 0;border-bottom:1px solid var(--line)}.policy-stage::before{content:counter(stage);color:var(--accent);font:600 12px var(--mono)}.policy-stage h3{margin:0;font-size:16px}.policy-stage p{margin:0;color:var(--muted)}
+.exit-rule{display:grid;grid-template-columns:120px 1fr;gap:18px;margin-top:24px;padding:15px 17px;border:1px solid color-mix(in srgb,var(--danger) 45%,var(--line));border-radius:4px;background:color-mix(in srgb,var(--danger) 6%,var(--paper))}.exit-rule b{color:var(--danger);font:600 11px var(--mono);text-transform:uppercase}.exit-rule span{color:var(--muted)}
+.trigger-grid{display:grid;grid-template-columns:1fr 1fr;margin-top:26px;border:1px solid var(--line);border-radius:4px;overflow:hidden}.trigger{padding:11px 14px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.trigger:nth-child(2n){border-right:0}.trigger::before{content:"•";margin-right:8px;color:var(--accent)}.trigger.critical::after{content:" required";color:var(--danger);font:10px var(--mono)}
+.context-layout{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(240px,.65fr);gap:20px}.context-notes{display:grid;gap:0;border-top:1px solid var(--line)}.context-note{padding:12px 0;border-bottom:1px solid var(--line);color:var(--muted)}.context-note b{display:block;margin-bottom:3px;color:var(--ink)}
+.invariants{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:4px;overflow:hidden}.invariant{display:grid;grid-template-columns:34px 1fr;gap:10px;padding:13px 15px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.invariant:nth-child(2n){border-right:0}.invariant b{color:var(--accent);font:600 11px var(--mono)}
+.failure-log{border:1px solid var(--line);border-radius:4px;overflow:hidden}.failure-row{display:grid;grid-template-columns:210px 1fr;border-bottom:1px solid var(--line)}.failure-row:last-child{border:0}.failure-row>*{padding:11px 14px}.failure-row b{border-right:1px solid var(--line);color:var(--danger);font:11px var(--mono)}.failure-row span{color:var(--muted)}
+.roadmap{display:grid;grid-template-columns:1fr 1fr;border:1px solid var(--line);border-radius:4px;overflow:hidden}.phase{position:relative;min-height:172px;padding:18px 18px 42px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.phase:nth-child(2n){border-right:0}.phase .letter{float:left;margin-right:10px;color:var(--subtle);font:600 18px var(--mono)}.phase .status{color:var(--success);font:600 10px var(--mono);text-transform:uppercase}.phase h3{margin:8px 0 4px;font-size:17px}.phase p{margin:0;color:var(--muted)}.phase footer{position:absolute;right:18px;bottom:13px;left:18px;padding-top:8px;border-top:1px solid var(--line);color:var(--subtle);font:9px var(--mono)}
+.tests{columns:2;column-gap:36px;margin:28px 0 0;padding:0;list-style:none;counter-reset:test}.tests li{counter-increment:test;position:relative;break-inside:avoid;padding:8px 0 8px 34px;border-bottom:1px solid var(--line)}.tests li::before{content:counter(test,decimal-leading-zero);position:absolute;left:0;color:var(--accent);font:10px var(--mono)}
+.questions{border:1px solid var(--line);border-radius:4px;overflow:hidden}.question{display:grid;grid-template-columns:36px 1fr;gap:10px;padding:14px;border-bottom:1px solid var(--line)}.question:last-child{border:0}.question b{color:var(--accent);font:11px var(--mono)}.question p{margin:0}.question small{display:block;margin-top:3px;color:var(--muted)}
+.doc-footer{display:flex;justify-content:space-between;gap:20px;padding:28px clamp(48px,7vw,88px) 42px;color:var(--subtle);font:10px var(--mono)}
+.reveal,.reveal.visible{opacity:1;transform:none}:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media(max-width:900px){.shell{display:block;border:0}.rail{position:static;height:auto;padding:22px 28px;border-right:0;border-bottom:1px solid var(--line)}.rail nav{display:flex;flex-wrap:wrap;gap:4px;margin-top:22px}.rail nav a{padding:7px 10px;border:1px solid var(--line);border-radius:3px}.rail nav a::before{display:none}.rail-bottom{display:none}.hero,.section{padding-inline:28px}.hero{padding-block:52px 44px}}
+@media(max-width:640px){body{font-size:14px}.rail nav{display:none}.hero{padding:40px 20px 36px}.hero h1{font-size:34px}.hero-lead{font-size:16px}.section{padding:44px 20px}.section h2{font-size:25px}.authority,.tool-grid,.trigger-grid,.context-layout,.invariants,.roadmap{grid-template-columns:1fr}.tool,.invariant,.phase,.trigger{border-right:0}.roster-row{grid-template-columns:1fr 100px}.roster-desc,.roster-rev{grid-column:1/-1;text-align:left}.roster-row.head{display:none}.delegate-track{grid-template-columns:1fr}.delegate-step{border-right:0;border-bottom:1px solid var(--line)}.policy-stage{grid-template-columns:26px 1fr}.policy-stage p{grid-column:2}.failure-row{grid-template-columns:1fr}.failure-row b{border-right:0;border-bottom:1px solid var(--line)}.tests{columns:1}.doc-footer{display:block;padding:24px 20px 40px}.doc-footer span{display:block;margin-top:8px}}
+@media print{body{background:#fff;color:#000}.shell{display:block;width:auto;border:0}.rail{position:static;height:auto;border:0;border-bottom:1px solid #bbb;padding:0 0 18px;background:#fff}.rail nav,.rail-bottom{display:none}.hero,.section{padding:32px 0;break-inside:auto}.section{break-before:page}.hero-meta,.chip{color:#000}.content{max-width:none}.doc-footer{padding-inline:0}a{color:#000;text-decoration:none}}
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="rail">
+  <a class="brand" href="#top">GO<span>AH</span></a>
+  <div class="rail-kicker">Technical design<br>Revision 0.2</div>
+  <nav aria-label="Document sections">
+    <a href="#interface" data-id="01"><span>Product contract</span></a>
+    <a href="#team" data-id="02"><span>Derived team model</span></a>
+    <a href="#delegate" data-id="03"><span>Atomic operations</span></a>
+    <a href="#policy" data-id="04"><span>Runtime policy</span></a>
+    <a href="#context" data-id="05"><span>Active context</span></a>
+    <a href="#invariants" data-id="06"><span>Invariants</span></a>
+    <a href="#ship" data-id="07"><span>Implementation status</span></a>
+  </nav>
+  <div class="rail-bottom">
+    <div class="signal">IMPLEMENTED A–C</div>
+    <a href="./Goah-架构设计-v2.html">← SYSTEM ARCHITECTURE</a>
+    <a href="./docs/proposals/ceo-agent-operating-layer.md">MARKDOWN SOURCE</a>
+  </div>
+</aside>
+
+<main class="content" id="top">
+<header class="hero">
+  <div class="hero-copy">
+    <div class="overline">Technical design document</div>
+    <h1>Goah CEO Agent Operating Layer<span>用户入口、组织运行协议与机械保证</span></h1>
+    <p class="hero-lead">本文定义 CEO Agent 如何作为 Goah 的唯一正常用户入口，将人类意图转换为持久 Goal 树，组织短命 Agent，检查证据，并在跨 Session、跨时间运行中维持组织连续性。</p>
+    <div class="hero-meta"><span class="chip hot">IMPLEMENTED / A–C</span><span class="chip">PRODUCT ARCHITECTURE 0.2</span><span class="chip">2026-08-19</span></div>
+    <div class="thesis"><b>ARCHITECTURAL DECISION</b><br>CEO 不是常驻进程，而是每次 wake 时由 Ledger 重建的持久身份。模型负责开放式组织判断；Supervisor 和 SQLite 负责状态转换、原子性与恢复语义。</div>
+  </div>
+</header>
+
+<section class="section reveal" id="interface">
+  <div class="section-head"><div class="section-id">01 · Product contract</div><h2>唯一用户入口与权限边界</h2><p class="section-intro">用户不管理 child 名称、schedule 或 wake。正常操作只有目标、消息、审批和最终完成。</p></div>
+  <div class="terminal"><div class="terminal-bar"><span>goah / human console</span><b>SOLE ENTRY</b></div><pre>goah goal start --objective "Launch a profitable store"
+goah ceo send --message "Prioritize low inventory risk"
+goah ceo status
+goah ceo inbox
+goah ceo approve &lt;action-id&gt; --reason "..." --evidence &lt;seqs&gt;
+goah goal complete &lt;root-goal-id&gt;</pre></div>
+  <div class="authority">
+    <article class="authority-card"><div class="label">PURPOSE AUTHORITY</div><h3>Human controls why.</h3><p>创建、修订、暂停、恢复、完成 root Goal。root 的执行 owner 是 CEO，但目的层永远属于人类。</p></article>
+    <div class="authority-lock">↔</div>
+    <article class="authority-card"><div class="label">METHOD AUTHORITY</div><h3>CEO controls how.</h3><p>拆解 descendants、委派 ownership、重组团队。只能推荐 root completion，不能替人类完成根目标。</p></article>
+  </div>
+</section>
+
+<section class="section reveal" id="team">
+  <div class="section-head"><div class="section-id">02 · Derived projection</div><h2>派生团队模型</h2><p class="section-intro">不新增 Agent 事实表。一个 owner 是否存在、是否在动、是否退休，全部从 Goal、Wake、Schedule 与 Handoff 推导。</p></div>
+  <div class="roster">
+    <div class="roster-row head"><span>OWNER</span><span>STATE</span><span>DERIVATION</span><span>REV</span></div>
+    <div class="roster-row"><span class="roster-name">research</span><span class="state running">running</span><span class="roster-desc">active goal + running wake</span><span class="roster-rev">r12</span></div>
+    <div class="roster-row"><span class="roster-name">operator</span><span class="state blocked">blocked</span><span class="roster-desc">all open goals blocked · CEO trigger pending</span><span class="roster-rev">r08</span></div>
+    <div class="roster-row"><span class="roster-name">builder</span><span class="state scheduled">scheduled</span><span class="roster-desc">future wake at 14:30Z</span><span class="roster-rev">r03</span></div>
+    <div class="roster-row"><span class="roster-name">analyst</span><span class="state idle">idle_unplanned</span><span class="roster-desc">active goal · no wake · no wait · invariant violation</span><span class="roster-rev">r04</span></div>
+  </div>
+  <div class="thesis"><b>EXISTENCE RULE //</b> Non-complete Goal with owner → Agent exists. All owned Goals complete → Agent retires.</div>
+</section>
+
+<section class="section reveal" id="delegate">
+  <div class="section-head"><div class="section-id">03 · Transaction boundary</div><h2>原子 Delegation 与高层工具</h2><p class="section-intro">模型判断是否委派；Supervisor 保证这个判断不会留下“有 Goal、没人醒”的半完成组织。</p></div>
+  <div class="delegate-track">
+    <article class="delegate-step"><div class="n">01</div><h3>Goal</h3><p>创建 child objective 与 owner。</p></article>
+    <article class="delegate-step"><div class="n">02</div><h3>Evidence</h3><p>记录 delegation ID、reason 和 seq。</p></article>
+    <article class="delegate-step"><div class="n">03</div><h3>Mail</h3><p>投递 decision-level brief。</p></article>
+    <article class="delegate-step"><div class="n">04</div><h3>Wake</h3><p>立即 enqueue 新 owner。</p></article>
+  </div>
+  <div class="atomic">ONE SQLITE TRANSACTION · IDEMPOTENT BY DELEGATION ID</div>
+  <div class="tool-grid" style="margin-top:32px">
+    <div class="tool"><code>team_list</code><span>派生 roster、liveness 与 Goal ownership</span></div><div class="tool"><code>delegate</code><span>原子创建 child Goal + mail + wake</span></div>
+    <div class="tool"><code>reassign_goal</code><span>转移 ownership，通知双方，只 wake 新 owner</span></div><div class="tool"><code>pause / resume</code><span>控制 child motion，不销毁历史</span></div>
+    <div class="tool"><code>complete_goal</code><span>完成 child；无其他 Goal 时 owner retired</span></div><div class="tool"><code>request_human</code><span>请求人类决策或 root completion</span></div>
+    <div class="tool"><code>schedule_review</code><span>设置 CEO 下一次组织 review</span></div><div class="tool"><code>submit_action</code><span>沿用外部副作用的审计协议</span></div>
+  </div>
+</section>
+
+<section class="section reveal" id="policy">
+  <div class="section-head"><div class="section-id">04 · Runtime policy</div><h2>CEO Operating Policy 与触发条件</h2><p class="section-intro">开放式判断留给模型；组织变化只通过可审计、高层、原子工具生效。</p></div>
+  <div class="policy-list">
+    <article class="policy-stage"><h3>Orient</h3><p>读取 root、Goal tree、roster、mail、child handoffs、blockers、unknown actions 与 previous plan。</p></article>
+    <article class="policy-stage"><h3>Diagnose motion</h3><p>逐个 Goal 判断是否正在运行、排队、计划、等待，或已经失去 ownership coherence。</p></article>
+    <article class="policy-stage"><h3>Decide organization</h3><p>保持、delegate、revise、reassign、pause、complete、merge，或者升级给人类。</p></article>
+    <article class="policy-stage"><h3>Apply decisions</h3><p>只使用高层原子工具；不允许用多个低层调用模拟 delegation。</p></article>
+    <article class="policy-stage"><h3>Ensure motion</h3><p>每个 active child 必须有 wake、schedule、wait trigger，或一个已经升级的 blocker。</p></article>
+    <article class="policy-stage"><h3>Close the loop</h3><p>声明下一次 review、等待触发、人类 blocker，或提交 completion recommendation。</p></article>
+  </div>
+  <div class="exit-rule"><b>Invalid exit</b><span>root 仍 active，但 CEO handoff 无 delegation、无 schedule、无 wait、无 blocker。</span></div>
+  <div class="trigger-grid">
+    <div class="trigger">root create / revise / resume</div><div class="trigger critical">child complete / blocked</div>
+    <div class="trigger critical">retry exhausted</div><div class="trigger">material child handoff</div>
+    <div class="trigger critical">decision request</div><div class="trigger critical">unknown high-risk action</div>
+    <div class="trigger">audit finding</div><div class="trigger">CEO scheduled review</div>
+  </div>
+</section>
+
+<section class="section reveal" id="context">
+  <div class="section-head"><div class="section-id">05 · Model input</div><h2>CEO Active Context</h2><p class="section-intro">CEO 的上下文是有界组织视图，不是所有 child transcript 的拼接。</p></div>
+  <div class="context-layout">
+    <div class="context-window"><div class="top"><span>CEO_ACTIVE_CONTEXT.md</span><span>6.2 KB / 1M</span></div><pre># Root objective
+
+# Goal tree
+— growth / active / research
+— launch / blocked / operator
+
+# Team motion
+— research: running
+— operator: blocked · supplier approval
+
+# Material results
+— research: ... [event:182]
+
+# Decisions required
+# Unknown external actions
+# Previous CEO plan
+# Wake trigger</pre></div>
+    <div class="context-notes">
+      <div class="context-note"><b>Summary by default</b>每个 child 只带最新 material handoff 与 liveness。</div>
+      <div class="context-note"><b>Evidence on demand</b>原始 Session 通过 Inspector / ledger_search 读取。</div>
+      <div class="context-note"><b>Recovery stays bounded</b>只注入 abnormal、unknown tool 与 interrupted 事实。</div>
+      <div class="context-note"><b>No self-reported roster</b>team status 从 Ledger projection 推导。</div>
+    </div>
+  </div>
+</section>
+
+<section class="section reveal" id="invariants">
+  <div class="section-head"><div class="section-id">06 · Safety properties</div><h2>机械不变量与故障语义</h2><p class="section-intro">CEO 可以判断错，但不能让错误判断绕过组织状态机。</p></div>
+  <div class="invariants">
+    <div class="invariant"><b>C1</b><span>只有 human authority 可修改或完成 root Goal。</span></div><div class="invariant"><b>C2</b><span>delegation 原子提交 Goal + mail + wake。</span></div>
+    <div class="invariant"><b>C3</b><span>每个 active child Goal 必须有 owner。</span></div><div class="invariant"><b>C4</b><span>每个 active child 必须有 liveness route 或 blocker。</span></div>
+    <div class="invariant"><b>C5</b><span>CEO 不得留下 motionless active root。</span></div><div class="invariant"><b>C6</b><span>child terminal / blocked / exhausted 必须 wake CEO。</span></div>
+    <div class="invariant"><b>C7</b><span>complete Goal 不再接受自动 wake。</span></div><div class="invariant"><b>C8</b><span>roster 从 facts 推导，不信模型自述。</span></div>
+    <div class="invariant"><b>C9</b><span>重复 delegation ID 不产生重复工作。</span></div><div class="invariant"><b>C10</b><span>CEO recommendation 永不获得 root authority。</span></div>
+  </div>
+  <div class="failure-log" style="margin-top:30px">
+    <div class="failure-row"><b>CEO_CRASH_PRE_COMMIT</b><span>无组织变化。</span></div><div class="failure-row"><b>CEO_CRASH_POST_COMMIT</b><span>Goal / mail / wake 全部存在；重试幂等。</span></div>
+    <div class="failure-row"><b>CHILD_RETRY_EXHAUSTED</b><span>触发 CEO，携带 abnormal reason 与最后 durable handoff。</span></div><div class="failure-row"><b>MOTION_INVALID</b><span>拒绝 handoff，注入 violation 重试；重复失败升级 human。</span></div>
+  </div>
+</section>
+
+<section class="section reveal" id="ship">
+  <div class="section-head"><div class="section-id">07 · Delivery</div><h2>实现状态与验证计划</h2><p class="section-intro">Milestone A–C 已实现，确定性双 child canary 已通过；真实模型长跑仍属于运营验证。</p></div>
+  <div class="roadmap">
+    <article class="phase"><div class="letter">A</div><div class="status">Implemented</div><h3>Atomic delegation</h3><p>roster、commitDelegation、CEO triggers、幂等与故障注入。</p><footer>NO ORPHAN GOAL WITHOUT MAIL + WAKE</footer></article>
+    <article class="phase"><div class="letter">B</div><div class="status">Implemented</div><h3>CEO protocol</h3><p>高层 tools、Operating Policy、motion validation。</p><footer>NO IDLE_UNPLANNED CHILD</footer></article>
+    <article class="phase"><div class="letter">C</div><div class="status">Implemented</div><h3>One front door</h3><p>goal start、ceo send/status/inbox、default CEO init。</p><footer>INIT + ONE OBJECTIVE</footer></article>
+    <article class="phase"><div class="letter">D</div><div class="status">Deterministic canary</div><h3>Organization run</h3><p>2+ children、recovery、reassign/retire、human complete；真实模型长跑待运营验证。</p><footer>NO MANUAL CHILD ORCHESTRATION</footer></article>
+  </div>
+  <ol class="tests">
+    <li>root start 自动 wake CEO</li><li>delegation fault injection 全有或全无</li><li>duplicate delegation 幂等</li><li>新 owner 使用 default child profile</li>
+    <li>child terminal/block/exhausted wake CEO</li><li>reassign 只 wake 新 owner</li><li>complete child 不再自动 wake</li><li>roster 检测 idle_unplanned</li>
+    <li>无 motion 的 CEO handoff 被拒绝</li><li>CEO 无法修改 root phase</li><li>restart/replay 得到相同 roster</li><li>真实 canary 无人工 child orchestration</li>
+  </ol>
+  <h3 style="margin-top:44px;font-size:20px">Open questions</h3>
+  <div class="questions">
+    <div class="question"><b>Q1</b><p>多个 root Goals 共用一个 CEO？<small>Initial: one CEO, Active Context grouped by root.</small></p></div>
+    <div class="question"><b>Q2</b><p>child 可以继续 delegate？<small>Initial: no. Nested delegation comes later.</small></p></div>
+    <div class="question"><b>Q3</b><p>profile templates 进入 Ledger？<small>Initial: deployment config owns templates; wake records resolved name.</small></p></div>
+    <div class="question"><b>Q4</b><p>每个 child handoff 都 wake CEO？<small>Initial: terminal/material immediately; routine work coalesces into review.</small></p></div>
+  </div>
+</section>
+
+<footer class="doc-footer"><span>IMPLEMENTED A–C // REAL-MODEL LONG-RUN REMAINS OPERATIONAL VALIDATION</span><span><a href="./Goah-架构设计-v2.html">SYSTEM ARCHITECTURE</a> · <a href="./docs/proposals/ceo-agent-operating-layer.md">MARKDOWN</a></span></footer>
+</main>
+</div>
+<script>
+const nav=[...document.querySelectorAll('.rail nav a')];
+const targets=nav.map(a=>document.querySelector(a.getAttribute('href'))).filter(Boolean);
+const activeObserver=new IntersectionObserver(entries=>{const current=entries.filter(e=>e.isIntersecting).sort((a,b)=>b.intersectionRatio-a.intersectionRatio)[0];if(!current)return;nav.forEach(a=>a.classList.toggle('active',a.getAttribute('href')==='#'+current.target.id))},{rootMargin:'-28% 0px -58% 0px',threshold:[0,.2,.6]});targets.forEach(s=>activeObserver.observe(s));
+</script>
+</body>
+</html>

@@ -22,8 +22,8 @@ test("recovery context selects semantic failure facts instead of raw session tra
   const selected = selectRecoveryEvents(events);
   assert.deepEqual(selected.map((item) => item.type), ["tool.called", "wake.abnormal_reason", "tool.completed", "session.interrupted"]);
   const view = composeActiveContext({
-    role: "child", systemPrompt: "worker", wake: { id: "retry", agent: "worker", triggerRef: "retry:failed", status: "running", leaseUntil: "2030-01-01T00:01:00.000Z", attempt: 1, startedAt: "2030-01-01T00:00:00.000Z", endedAt: null, enqueuedSeq: 1, leaseToken: "lease", runnerPid: 1 },
-    goals: [], mail: [], actions: [], lastHandoff: null, teamHandoffs: [], recoveryEvents: selected,
+    role: "child", capabilities: ["ledger.search"], systemPrompt: "worker", wake: { id: "retry", agent: "worker", triggerRef: "retry:failed", status: "running", leaseUntil: "2030-01-01T00:01:00.000Z", attempt: 1, startedAt: "2030-01-01T00:00:00.000Z", endedAt: null, enqueuedSeq: 1, leaseToken: "lease", runnerPid: 1 },
+    goals: [], mail: [], actions: [], lastHandoff: null, teamHandoffs: [], team: [], recoveryEvents: selected,
   });
   assert.ok(view.text.length < 1_000);
   assert.doesNotMatch(view.text, /message\.assistant\.delta|request\.prepared/);

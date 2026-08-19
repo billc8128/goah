@@ -283,7 +283,29 @@ test("official Pi agent core worker completes a structured handoff through the p
   const started = ledger.events().find((event) => event.type === "session.started");
   assert.equal((started?.data as { formatVersion?: number }).formatVersion, 1);
   assert.equal(ledger.events().some((event) => event.type === "request.prepared"), true);
+  const prepared = ledger.events().find((event) => event.type === "request.prepared")?.data as { tools?: Array<{ name?: string }> };
+  assert.equal(prepared.tools?.some((tool) => tool.name === "delegate_goal"), false);
+  assert.equal(prepared.tools?.some((tool) => tool.name === "team_list"), false);
+  assert.equal(prepared.tools?.some((tool) => tool.name === "ledger_search"), true);
   assert.deepEqual(ledger.lastEvent("worker", "handoff.recorded")?.data, { observations: ["pi core ran"], results: ["ok"], nextSteps: [] });
+  ledger.close();
+});
+
+test("official Pi worker exposes organization tools only to the CEO profile", async () => {
+  const clock = new SimulatedClock();
+  const ledger = createMemoryLedger({ clock });
+  const runner = new ProcessRunner({ command: process.execPath, args: [piWorkerPath()], env: {
+    GOAH_PI_PROVIDER: "faux",
+    GOAH_PI_MODEL: "faux-ceo",
+    GOAH_PI_FAUX_HANDOFF: JSON.stringify({ observations: ["oriented"], results: [], nextSteps: ["review"], nextWakeAt: "2026-08-19T00:00:00.000Z" }),
+  } });
+  const supervisor = new Supervisor(ledger, runner, clock);
+  supervisor.startGoal("operate organization", "pi-ceo-root");
+  assert.equal((await supervisor.tick())?.status, "done");
+  const prepared = ledger.events().find((event) => event.type === "request.prepared")?.data as { tools?: Array<{ name?: string }> };
+  assert.equal(prepared.tools?.some((tool) => tool.name === "delegate_goal"), true);
+  assert.equal(prepared.tools?.some((tool) => tool.name === "team_list"), true);
+  assert.equal(prepared.tools?.some((tool) => tool.name === "put_goal"), false);
   ledger.close();
 });
 
@@ -316,20 +338,76 @@ test("bidirectional runner RPC applies child capabilities and rejects parent-onl
   ledger.close();
 });
 
-test("CEO role can create a child goal and receives its dedicated system prompt", async () => {
+test("CEO role delegates atomically and receives its dedicated operating policy", async () => {
   const clock = new SimulatedClock();
   const ledger = createMemoryLedger({ clock });
   const root = { id: "ceo-root", parentId: null, objective: "build organization", owner: "ceo", phase: "active", revision: 0 } as const;
-  const child = { id: "child", parentId: "ceo-root", objective: "own metric", owner: "worker", phase: "active", revision: 0 } as const;
+  ledger.putGoal(root, "human");
+  const evidence = ledger.appendEvent({ ...event("ceo", "organization.observed", { independent: true }), ts: clock.now().toISOString() });
   const contextFile = join(mkdtempSync(join(tmpdir(), "goah-ceo-")), "context.json");
   const supervisor = new Supervisor(ledger, fauxRunner([
-    { rpc: { method: "goal.put", params: { goal: child } } },
+    { rpc: { method: "goal.delegate", params: { id: "delegation-1", parentGoalId: "ceo-root", childGoal: { id: "child", objective: "own metric", owner: "worker" }, brief: { deliverable: "metric" }, reason: "independent result", evidence: [evidence.seq] } } },
     { handoff: { handoff: { observations: [], results: ["delegated"], nextSteps: [] }, mail: [], nextWakeAt: null } },
   ], contextFile), clock, { profiles: [{ agent: "ceo", role: "ceo" }] });
-  ledger.putGoal(root, "human"); supervisor.planWake("ceo", clock.now().toISOString(), "replan");
+  supervisor.planWake("ceo", clock.now().toISOString(), "replan");
   assert.equal((await supervisor.tick())?.status, "done");
   assert.equal(ledger.goal("child")?.owner, "worker");
-  assert.match((JSON.parse(readFileSync(contextFile, "utf8")) as { systemPrompt: string }).systemPrompt, /goal tree/i);
+  assert.equal(ledger.unreadMail("worker").length, 1);
+  assert.equal(ledger.queuedWakeForAgent("worker")?.triggerRef, "delegation:delegation-1");
+  assert.match((JSON.parse(readFileSync(contextFile, "utf8")) as { systemPrompt: string }).systemPrompt, /sole operating interface/i);
+  ledger.close();
+});
+
+test("CEO rejects a motionless active organization and injects the violation into retry context", async () => {
+  const clock = new SimulatedClock();
+  const ledger = createMemoryLedger({ clock });
+  const contextFile = join(mkdtempSync(join(tmpdir(), "goah-ceo-invalid-")), "context.json");
+  const supervisor = new Supervisor(ledger, fauxRunner([{ handoff: { handoff: { observations: [], results: [], nextSteps: [] }, mail: [], nextWakeAt: null } }], contextFile), clock, { retryPolicy: { maxAttempts: 2, baseDelayMs: 1 } });
+  const started = supervisor.startGoal("operate without stalling", "root-motion");
+  assert.equal(started.wake.agent, "ceo");
+  assert.equal((await supervisor.tick())?.status, "abnormal");
+  assert.equal(ledger.events().some((item) => item.type === "ceo.motion_invalid"), true);
+  clock.advance(2);
+  assert.equal((await supervisor.tick())?.status, "abnormal");
+  assert.match((JSON.parse(readFileSync(contextFile, "utf8")) as { text: string }).text, /ceo\.motion_invalid/);
+  ledger.close();
+});
+
+test("one root goal forms a two-agent organization and returns completion control to the human", async () => {
+  const clock = new SimulatedClock();
+  const ledger = createMemoryLedger({ clock });
+  const byTrigger = {
+    "root:company:created": [
+      { rpc: { method: "team.list", params: {} } },
+      { rpc: { method: "goal.delegate", params: { id: "d-research", parentGoalId: "company", childGoal: { id: "market", objective: "validate demand", owner: "research" }, brief: { deliverable: "evidence" }, reason: "independent evidence boundary", evidence: [1] } } },
+      { rpc: { method: "goal.delegate", params: { id: "d-operations", parentGoalId: "company", childGoal: { id: "operations", objective: "design fulfillment", owner: "operator" }, brief: { deliverable: "plan" }, reason: "independent operating boundary", evidence: [1] } } },
+      { handoff: { handoff: { observations: ["team formed"], results: ["delegated"], nextSteps: ["review material handoffs"] }, mail: [], nextWakeAt: "2026-08-19T00:00:00.000Z" } },
+    ],
+    "child-handoff:": [
+      { rpc: { method: "goal.complete", params: { goalId: "market" } } },
+      { rpc: { method: "goal.complete", params: { goalId: "operations" } } },
+      { rpc: { method: "human.request", params: { type: "completion_recommendation", message: "review consolidated child results", evidence: [1] } } },
+      { handoff: { handoff: { observations: ["children retired"], results: ["organization complete"], nextSteps: ["human closes root"] }, mail: [], nextWakeAt: null } },
+    ],
+  };
+  const byAgent = {
+    research: [{ handoff: { handoff: { observations: [], results: ["demand evidence"], nextSteps: [], material: true }, mail: [], nextWakeAt: "2026-08-20T00:00:00.000Z" } }],
+    operator: [{ handoff: { handoff: { observations: [], results: ["fulfillment plan"], nextSteps: [], material: true }, mail: [], nextWakeAt: "2026-08-20T00:00:00.000Z" } }],
+  };
+  const runner = new ProcessRunner({ command: process.execPath, args: [fauxRunnerWorkerPath()], env: { GOAH_FAUX_STEPS_BY_AGENT: JSON.stringify(byAgent), GOAH_FAUX_STEPS_BY_TRIGGER: JSON.stringify(byTrigger) }, killGraceMs: 25 });
+  const supervisor = new Supervisor(ledger, runner, clock);
+  supervisor.startGoal("launch a durable company", "company");
+  const completed = await supervisor.runAvailable(3, 10);
+  assert.deepEqual([...new Set(completed.map((wake) => wake.agent))].sort(), ["ceo", "operator", "research"]);
+  assert.equal(ledger.goals().filter((goal) => goal.parentId === "company").length, 2);
+  assert.deepEqual(ledger.wakes().filter((wake) => wake.agent !== "ceo").map((wake) => wake.triggerRef).sort(), ["delegation:d-operations", "delegation:d-research"]);
+  assert.deepEqual(supervisor.teamList().filter((member) => member.agent !== "ceo").map((member) => member.status), ["retired", "retired"]);
+  assert.equal(ledger.unreadMail("human").some((mail) => (mail.body as { type?: string }).type === "completion_recommendation"), true);
+  const rosterBeforeReplay = JSON.stringify(supervisor.teamList());
+  ledger.rebuildProjections();
+  assert.equal(JSON.stringify(supervisor.teamList()), rosterBeforeReplay);
+  assert.equal(supervisor.transitionGoal("company", "complete", "human").phase, "complete");
+  assert.equal(ledger.goal("company")?.phase, "complete");
   ledger.close();
 });
 

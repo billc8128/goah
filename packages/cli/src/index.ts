@@ -78,7 +78,7 @@ export function defaultConfig(directory: string, options: InitOptions = {}): Goa
     version: 1,
     stateDir: defaultStateDir(directory),
     runner: { command: process.execPath, args: ["$GOAH_PI_WORKER"], env: runnerEnv },
-    profiles: [{ agent: options.agent ?? "worker", role: "child" }],
+    profiles: [{ agent: "ceo", role: "ceo" }, { agent: options.agent ?? "worker", role: "child" }],
     approvers: ["human", "ceo"],
     auditWriters: ["verifier", "audit"],
     retryPolicy: { maxAttempts: 2, baseDelayMs: 5_000 },

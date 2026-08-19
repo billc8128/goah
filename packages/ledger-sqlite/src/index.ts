@@ -9,6 +9,8 @@ import {
   type AuditAdvice,
   type Clock,
   controlStream,
+  type DelegationRequest,
+  type DelegationResult,
   type EventInput,
   type EventRecord,
   goalStream,
@@ -18,12 +20,14 @@ import {
   type Ledger,
   type MailSnapshot,
   type MetricSample,
+  type ReassignmentRequest,
+  type ReassignmentResult,
   type ScheduleSnapshot,
   type WakeSnapshot,
   wakeStream,
 } from "goah-ledger-contract";
 
-type FaultPoint = "after_event_before_projection";
+type FaultPoint = "after_event_before_projection" | "after_delegation_event" | "after_reassignment_event";
 type FaultInjector = (point: FaultPoint) => void;
 type Row = Record<string, unknown>;
 type ProjectionName = "goals" | "schedule" | "wakes" | "mailbox" | "actions";
@@ -196,11 +200,106 @@ export class SqliteLedger implements Ledger {
       if (goal.parentId !== current.parentId) throw new Error("goal reparenting is not supported");
       assertGoalTransition(current.phase, goal.phase);
       this.#assertGoalAuthority(current.parentId, actor);
+      if (current.parentId === null && goal.phase === "complete") {
+        const open = this.db.prepare(`WITH RECURSIVE descendants(id) AS (
+          SELECT id FROM goals WHERE parent_id=?
+          UNION ALL SELECT g.id FROM goals g JOIN descendants d ON g.parent_id=d.id
+        ) SELECT 1 FROM goals WHERE id IN (SELECT id FROM descendants) AND phase<>'complete' LIMIT 1`).get(goal.id);
+        if (open) throw new Error("root goal cannot complete while descendants remain non-complete");
+      }
     } else {
       if (goal.revision !== 0) throw new Error("new goal revision must be 0");
       this.#assertGoalAuthority(goal.parentId, actor);
     }
     return this.#project("goals", goal, actor, "goal.put", wakeId, undefined, goalStream(goal.id));
+  }
+
+  commitDelegation(request: DelegationRequest, actor: string, wakeId?: string): DelegationResult {
+    const existing = this.#delegationResult(request.id);
+    if (existing) {
+      if (existing.goal.id !== request.childGoal.id || existing.goal.parentId !== request.parentGoalId || existing.goal.objective !== request.childGoal.objective || existing.goal.owner !== request.childGoal.owner) throw new Error("delegation id was reused with a different child goal");
+      return existing;
+    }
+    if (!request.id.trim() || !request.reason.trim()) throw new Error("delegation id and reason are required");
+    if (!request.childGoal.id.trim() || !request.childGoal.objective.trim() || !request.childGoal.owner.trim()) throw new Error("delegation child goal is incomplete");
+    this.#assertEvidenceExists(request.evidence);
+    const parent = this.#getGoal(request.parentGoalId);
+    if (!parent) throw new Error("delegation parent goal does not exist");
+    if (parent.owner !== actor) throw new Error("only the parent goal owner may delegate");
+    if (parent.phase !== "active") throw new Error("delegation parent goal must be active");
+    if (this.#getGoal(request.childGoal.id)) throw new Error("delegation child goal already exists");
+
+    return this.#transaction(() => {
+      const goal: GoalSnapshot = { ...request.childGoal, parentId: request.parentGoalId, phase: "active", revision: 0 };
+      const mail: MailSnapshot = {
+        id: `delegation-mail:${request.id}`,
+        to: goal.owner,
+        from: actor,
+        level: "decision",
+        body: { type: "delegation", delegationId: request.id, goalId: goal.id, parentGoalId: request.parentGoalId, brief: request.brief, reason: request.reason, evidence: request.evidence },
+        readAt: null,
+      };
+      const wakeBase: WakeSnapshot = {
+        id: `delegation-wake:${request.id}`,
+        agent: goal.owner,
+        triggerRef: `delegation:${request.id}`,
+        status: "queued",
+        leaseUntil: null,
+        attempt: 0,
+        startedAt: null,
+        endedAt: null,
+        enqueuedSeq: 0,
+        leaseToken: null,
+        runnerPid: null,
+      };
+      this.#insertEvent({
+        streamId: wakeId ? wakeStream(wakeId) : controlStream("delegations"),
+        ts: this.#now(),
+        actor,
+        type: "delegation.created",
+        data: { delegationId: request.id, parentGoalId: request.parentGoalId, goalId: goal.id, mailId: mail.id, wakeId: wakeBase.id, reason: request.reason, evidence: request.evidence },
+      });
+      this.#faultInjector?.("after_delegation_event");
+      this.#recordProjection("goals", goal, actor, "goal.put", wakeId, undefined, undefined, goalStream(goal.id));
+      this.#recordProjection("mailbox", mail, actor, "mail.put", wakeId);
+      const wake = { ...wakeBase, enqueuedSeq: this.#nextEventSeq() };
+      this.#recordProjection("wakes", wake, "supervisor", "wake.enqueued", wake.id, undefined, wake.enqueuedSeq);
+      return { delegationId: request.id, goal, mail, wake };
+    });
+  }
+
+  commitReassignment(request: ReassignmentRequest, actor: string, wakeId?: string): ReassignmentResult {
+    const existing = this.#reassignmentResult(request.id);
+    if (existing) {
+      if (existing.goal.id !== request.goalId || existing.goal.owner !== request.newOwner) throw new Error("reassignment id was reused with a different target");
+      return existing;
+    }
+    if (!request.id.trim() || !request.newOwner.trim() || !request.reason.trim()) throw new Error("reassignment id, owner and reason are required");
+    this.#assertEvidenceExists(request.evidence);
+    const current = this.#getGoal(request.goalId);
+    if (!current) throw new Error("reassignment goal does not exist");
+    if (!current.parentId) throw new Error("root goals cannot be reassigned by CEO");
+    this.#assertGoalAuthority(current.parentId, actor);
+    if (current.phase === "complete") throw new Error("completed goals cannot be reassigned");
+    if (current.owner === request.newOwner) throw new Error("reassignment owner is unchanged");
+
+    return this.#transaction(() => {
+      const goal: GoalSnapshot = { ...current, owner: request.newOwner, revision: current.revision + 1 };
+      const mail: MailSnapshot[] = [
+        { id: `reassignment-old-mail:${request.id}`, to: current.owner, from: actor, level: "fyi", body: { type: "reassignment", reassignmentId: request.id, goalId: goal.id, role: "previous_owner", reason: request.reason, evidence: request.evidence }, readAt: null },
+        { id: `reassignment-new-mail:${request.id}`, to: goal.owner, from: actor, level: "decision", body: { type: "reassignment", reassignmentId: request.id, goalId: goal.id, role: "new_owner", brief: request.brief, reason: request.reason, evidence: request.evidence }, readAt: null },
+      ];
+      const wakeBase: WakeSnapshot = { id: `reassignment-wake:${request.id}`, agent: goal.owner, triggerRef: `reassignment:${request.id}`, status: "queued", leaseUntil: null, attempt: 0, startedAt: null, endedAt: null, enqueuedSeq: 0, leaseToken: null, runnerPid: null };
+      this.#insertEvent({ streamId: wakeId ? wakeStream(wakeId) : controlStream("reassignments"), ts: this.#now(), actor, type: "goal.reassigned", data: { reassignmentId: request.id, goalId: goal.id, oldOwner: current.owner, newOwner: goal.owner, mailIds: mail.map((item) => item.id), wakeId: wakeBase.id, reason: request.reason, evidence: request.evidence } });
+      this.#faultInjector?.("after_reassignment_event");
+      this.#recordProjection("goals", goal, actor, "goal.put", wakeId, undefined, undefined, goalStream(goal.id));
+      const oldWake = this.queuedWakeForAgent(current.owner);
+      if (oldWake) this.#recordProjection("wakes", { ...oldWake, status: "abnormal", endedAt: this.#now() }, "supervisor", "wake.suppressed", oldWake.id);
+      for (const item of mail) this.#recordProjection("mailbox", item, actor, "mail.put", wakeId);
+      const wake = { ...wakeBase, enqueuedSeq: this.#nextEventSeq() };
+      this.#recordProjection("wakes", wake, "supervisor", "wake.enqueued", wake.id, undefined, wake.enqueuedSeq);
+      return { reassignmentId: request.id, goal, mail, wake };
+    });
   }
 
   putSchedule(value: ScheduleSnapshot, actor: string, wakeId?: string): EventRecord {
@@ -416,6 +515,32 @@ export class SqliteLedger implements Ledger {
         if (data.projection && data.snapshot) this.#applyProjection(data.projection, data.snapshot, event.seq);
       }
     });
+  }
+
+  #delegationResult(id: string): DelegationResult | null {
+    const row = this.db.prepare("SELECT data FROM events WHERE type='delegation.created' AND json_extract(data,'$.delegationId')=? ORDER BY seq LIMIT 1").get(id) as { data: string } | undefined;
+    if (!row) return null;
+    const data = JSON.parse(row.data) as { goalId: string; mailId: string; wakeId: string };
+    const goal = this.#getGoal(data.goalId);
+    const mailRow = this.db.prepare("SELECT * FROM mailbox WHERE id=?").get(data.mailId) as Row | undefined;
+    const wake = this.wake(data.wakeId);
+    if (!goal || !mailRow || !wake) throw new Error("committed delegation projections are incomplete");
+    return { delegationId: id, goal, mail: mapMail(mailRow), wake };
+  }
+
+  #reassignmentResult(id: string): ReassignmentResult | null {
+    const row = this.db.prepare("SELECT data FROM events WHERE type='goal.reassigned' AND json_extract(data,'$.reassignmentId')=? ORDER BY seq LIMIT 1").get(id) as { data: string } | undefined;
+    if (!row) return null;
+    const data = JSON.parse(row.data) as { goalId: string; mailIds: string[]; wakeId: string };
+    const goal = this.#getGoal(data.goalId);
+    const mail = data.mailIds.map((mailId) => {
+      const mailRow = this.db.prepare("SELECT * FROM mailbox WHERE id=?").get(mailId) as Row | undefined;
+      if (!mailRow) throw new Error("committed reassignment mail is missing");
+      return mapMail(mailRow);
+    });
+    const wake = this.wake(data.wakeId);
+    if (!goal || !wake) throw new Error("committed reassignment projections are incomplete");
+    return { reassignmentId: id, goal, mail, wake };
   }
 
   #decideAction(id: string, status: "approved" | "failed", approver: string, reason: string, evidence: number[]): ActionSnapshot {

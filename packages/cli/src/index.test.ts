@@ -35,6 +35,7 @@ test("CLI initializes versioned config, resolves secret references, and enforces
   assert.equal(initialized.workspace, undefined);
   assert.equal(initialized.stateDir.startsWith(directory), false);
   assert.equal(initialized.limits, undefined);
+  assert.equal(initialized.profiles.some((profile: { agent: string; role: string }) => profile.agent === "ceo" && profile.role === "ceo"), true);
   process.env.GOAH_CLI_TEST_KEY = "secret";
   const raw = JSON.parse(readFileSync(join(directory, "goah.config.json"), "utf8"));
   raw.runner.env.ANTHROPIC_API_KEY = "env:GOAH_CLI_TEST_KEY";
@@ -142,4 +143,19 @@ test("CLI runs a local operations goal without Git", () => {
   invoke(directory, "goal-create", "--id", "store", "--owner", "operator", "--objective", "Open a storefront", "--wake-now");
   assert.equal(JSON.parse(invoke(directory, "run-once")).wake.status, "done");
   assert.equal(JSON.parse(invoke(directory, "status")).wakes.length, 1);
+});
+
+test("CLI exposes one-objective CEO entry and coalesces human corrections", () => {
+  const directory = repository();
+  invoke(directory, "init", "--provider", "faux");
+  const started = JSON.parse(invoke(directory, "goal", "start", "--id", "company", "--objective", "Launch a company"));
+  assert.equal(started.goal.owner, "ceo");
+  assert.equal(started.wake.agent, "ceo");
+  const sent = JSON.parse(invoke(directory, "ceo", "send", "--message", "Prioritize low inventory risk"));
+  assert.equal(sent.mail.to, "ceo");
+  assert.equal(sent.wake.id, started.wake.id);
+  const status = JSON.parse(invoke(directory, "ceo", "status"));
+  assert.equal(status.roots[0].id, "company");
+  assert.equal(status.team.find((member: { agent: string }) => member.agent === "ceo").status, "queued");
+  assert.deepEqual(JSON.parse(invoke(directory, "ceo", "inbox")), []);
 });

@@ -49,10 +49,13 @@ export async function runPiWorker(): Promise<void> {
       return id;
     };
     const root = resolve(process.cwd());
-    const tools = createTools(root, (value) => { output = value; }, process.env.GOAH_PI_ALLOW_BASH === "true", rpc, request.wake.startedAt);
+    const contextRecord = typeof request.context === "object" && request.context !== null && !Array.isArray(request.context) ? request.context : {};
+    const capabilities = Array.isArray(contextRecord.capabilities)
+      ? new Set(contextRecord.capabilities.filter((value): value is AgentCapability => typeof value === "string"))
+      : undefined;
+    const tools = createTools(root, (value) => { output = value; }, process.env.GOAH_PI_ALLOW_BASH === "true", rpc, request.wake.startedAt, capabilities);
     const contextPolicy = resolveContextPolicy(model.contextWindow, process.env);
     emit({ type: "session.started", data: { formatVersion: SESSION_FORMAT_VERSION, provider, model: modelId, runner: "pi", contextWindowTokens: model.contextWindow, maxOutputTokensPerTurn: model.maxTokens } });
-    const contextRecord = typeof request.context === "object" && request.context !== null && !Array.isArray(request.context) ? request.context : {};
     const suppliedPrompt = typeof contextRecord.systemPrompt === "string" ? contextRecord.systemPrompt : undefined;
     const activeContext = typeof contextRecord.text === "string" ? contextRecord.text : JSON.stringify(request.context);
     const sourceSeqs = Array.isArray(contextRecord.sourceSeqs) ? contextRecord.sourceSeqs.filter((value): value is number => Number.isInteger(value)) : [];
@@ -134,7 +137,7 @@ function sessionMessage(message: AgentMessage, id: string): SessionMessage {
   return { id, role, content: (value.content ?? value) as JsonValue, ...(value.usage !== undefined ? { usage: value.usage as JsonValue } : {}) };
 }
 
-function createTools(root: string, handoff: (output: WakeOutput) => void, allowBash: boolean, rpc: WorkerRpc, wakeStartedAt: string | null): AgentTool<any>[] {
+function createTools(root: string, handoff: (output: WakeOutput) => void, allowBash: boolean, rpc: WorkerRpc, wakeStartedAt: string | null, capabilities?: ReadonlySet<AgentCapability>): AgentTool<any>[] {
   const handoffTool: AgentTool<any> = {
     name: "handoff",
     label: "Handoff",
@@ -144,16 +147,17 @@ function createTools(root: string, handoff: (output: WakeOutput) => void, allowB
       results: Type.Array(Type.String()),
       nextSteps: Type.Array(Type.String()),
       blocker: Type.Optional(Type.String()),
+      material: Type.Optional(Type.Boolean()),
       nextWakeAt: Type.Optional(Type.String()),
     }),
     execute: async (_id, params) => {
-      const input = params as { observations: string[]; results: string[]; nextSteps: string[]; blocker?: string; nextWakeAt?: string };
-      const value: WakeOutput = { handoff: { observations: input.observations, results: input.results, nextSteps: input.nextSteps, ...(input.blocker ? { blocker: input.blocker } : {}) }, mail: [], nextWakeAt: validateNextWakeAt(input.nextWakeAt, wakeStartedAt) };
+      const input = params as { observations: string[]; results: string[]; nextSteps: string[]; blocker?: string; material?: boolean; nextWakeAt?: string };
+      const value: WakeOutput = { handoff: { observations: input.observations, results: input.results, nextSteps: input.nextSteps, ...(input.blocker ? { blocker: input.blocker } : {}), ...(input.material === true ? { material: true } : {}) }, mail: [], nextWakeAt: validateNextWakeAt(input.nextWakeAt, wakeStartedAt) };
       handoff(value);
       return { content: [{ type: "text", text: "handoff recorded" }], details: value, terminate: true };
     },
   };
-  const rpcTools = createRpcTools(rpc);
+  const rpcTools = createRpcTools(rpc, capabilities);
   const readTool: AgentTool<any> = {
     name: "read_file", label: "Read file", description: "Read a UTF-8 file inside the local runner root.",
     parameters: Type.Object({ path: Type.String() }),
@@ -226,20 +230,28 @@ export function compactMessagesToTokenBudget(messages: AgentMessage[], retainTok
   ];
 }
 
-function createRpcTools(rpc: WorkerRpc): AgentTool<any>[] {
+function createRpcTools(rpc: WorkerRpc, allowed?: ReadonlySet<AgentCapability>): AgentTool<any>[] {
   const tool = (name: string, description: string, method: AgentCapability, parameters: ReturnType<typeof Type.Object>): AgentTool<any> => ({
     name, label: name, description, parameters,
     execute: async (_id, params) => { const result = await rpc(method, params as JsonValue); return { content: [{ type: "text", text: JSON.stringify(result) }], details: result }; },
   });
-  return [
-    tool("ledger_search", "Search durable ledger facts.", "ledger.search", Type.Object({ query: Type.String(), limit: Type.Optional(Type.Number()) })),
-    tool("send_mail", "Send a durable message to another agent or human.", "mail.send", Type.Object({ to: Type.String(), level: Type.Union([Type.Literal("fyi"), Type.Literal("decision"), Type.Literal("emergency")]), body: Type.Any() })),
-    tool("schedule_wake", "Schedule this agent's next wake.", "schedule.set", Type.Object({ at: Type.String(), reason: Type.String() })),
-    tool("submit_action", "Submit a gated external action with evidence.", "action.submit", Type.Object({ id: Type.String(), kind: Type.String(), connector: Type.String(), payload: Type.Any(), reason: Type.String(), evidence: Type.Array(Type.Number()) })),
-    tool("ack_audit_advice", "Acknowledge audit advice after incorporating it.", "audit.ack", Type.Object({ actionId: Type.String() })),
-    tool("write_audit_advice", "Write audit advice for an action.", "audit.write", Type.Object({ actionId: Type.String(), body: Type.Any(), evidence: Type.Array(Type.Number()) })),
-    tool("put_goal", "Create or update a goal using parent-layer authority.", "goal.put", Type.Object({ goal: Type.Any() })),
+  const definitions: Array<[AgentCapability, AgentTool<any>]> = [
+    ["ledger.search", tool("ledger_search", "Search durable ledger facts.", "ledger.search", Type.Object({ query: Type.String(), limit: Type.Optional(Type.Number()) }))],
+    ["mail.send", tool("send_mail", "Send a durable message to another agent or human.", "mail.send", Type.Object({ to: Type.String(), level: Type.Union([Type.Literal("fyi"), Type.Literal("decision"), Type.Literal("emergency")]), body: Type.Any() }))],
+    ["schedule.set", tool("schedule_wake", "Schedule this agent's next wake.", "schedule.set", Type.Object({ at: Type.String(), reason: Type.String() }))],
+    ["action.submit", tool("submit_action", "Submit a gated external action with evidence.", "action.submit", Type.Object({ id: Type.String(), kind: Type.String(), connector: Type.String(), payload: Type.Any(), reason: Type.String(), evidence: Type.Array(Type.Number()) }))],
+    ["audit.ack", tool("ack_audit_advice", "Acknowledge audit advice after incorporating it.", "audit.ack", Type.Object({ actionId: Type.String() }))],
+    ["audit.write", tool("write_audit_advice", "Write audit advice for an action.", "audit.write", Type.Object({ actionId: Type.String(), body: Type.Any(), evidence: Type.Array(Type.Number()) }))],
+    ["team.list", tool("team_list", "Read the ledger-derived team roster and liveness state.", "team.list", Type.Object({}))],
+    ["goal.delegate", tool("delegate_goal", "Atomically create a child goal, send its decision brief, and queue its owner.", "goal.delegate", Type.Object({ id: Type.String(), parentGoalId: Type.String(), childGoal: Type.Object({ id: Type.String(), objective: Type.String(), owner: Type.String() }), brief: Type.Any(), reason: Type.String(), evidence: Type.Array(Type.Number()) }))],
+    ["goal.reassign", tool("reassign_goal", "Atomically transfer a child goal, notify both owners, and queue the new owner.", "goal.reassign", Type.Object({ id: Type.String(), goalId: Type.String(), newOwner: Type.String(), brief: Type.Any(), reason: Type.String(), evidence: Type.Array(Type.Number()) }))],
+    ["goal.pause", tool("pause_goal", "Pause a child goal and suppress queued motion.", "goal.pause", Type.Object({ goalId: Type.String() }))],
+    ["goal.resume", tool("resume_goal", "Resume a child goal and ensure its owner is queued.", "goal.resume", Type.Object({ goalId: Type.String() }))],
+    ["goal.complete", tool("complete_goal", "Complete a child goal. Root completion remains human authority.", "goal.complete", Type.Object({ goalId: Type.String() }))],
+    ["human.request", tool("request_human", "Ask the human for a decision or recommend root completion with evidence.", "human.request", Type.Object({ type: Type.Union([Type.Literal("decision"), Type.Literal("completion_recommendation")]), message: Type.Any(), evidence: Type.Array(Type.Number()) }))],
+    ["goal.put", tool("put_goal", "Create or update a goal using parent-layer authority.", "goal.put", Type.Object({ goal: Type.Any() }))],
   ];
+  return definitions.filter(([capability]) => !allowed || allowed.has(capability)).map(([, value]) => value);
 }
 
 function scoped(root: string, path: string): string {
