@@ -11,6 +11,6 @@ The action state machine remains generic: reason, evidence, approval gate, dispa
 
 Connector manifests likewise do not predefine account, environment, currency, or amount constraints. They declare only idempotency/query/retry behavior and whether an action is reversible, gated, or irreversible. Connector implementations and policy extensions own payload validation.
 
-Per-wake token and wall-clock limits remain in the runner contract because they bound process execution and preserve handoff capacity; they are runtime safety limits rather than goal-domain policy.
+Per-wake token, cost, timeout, and handoff-reserve policy are also outside the core request/result contract. A runner adapter may implement them when appropriate.
 
 SQLite schema v5 removes the legacy `goals.budget` projection column. Migration reads old goals and preserves every non-budget field without rewriting event history.

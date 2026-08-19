@@ -3,6 +3,7 @@
 ## 0.2.0
 
 - Removed workspace/Git lifecycle management and monetary budget policy from the supervisor; abnormal recovery preserves control state only.
+- Added sliding wake-lease renewal while a runner process is alive.
 
 ## 0.1.0
 

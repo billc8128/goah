@@ -17,7 +17,7 @@ goah is the harness around the agent that owns exactly that layer:
 - **The ledger is the agent.** Agent processes are short-lived: hydrate → work → handoff → exit. Everything durable lives in an append-only event ledger; every table is a projection that can be rebuilt from events. Crash recovery is replay, not heuristics.
 - **Every action is accountable.** An external action carries its `reason` and `evidence` (references to ledger events), passes a gate before dispatch, and has crash-safe delivery semantics — a crash mid-dispatch resolves to `unknown`, which is reconciled by querying, never blindly retried.
 - **Execution stays local and inspectable.** The runner owns local files, bash, and Git under the directory containing `goah.config.json`. GOAH records process failure and recovery context; coding skills decide how to branch, commit, merge, or preserve partial Git work.
-- **Bounded runs by construction.** Every wake has hard token and wall-clock limits with a reserved handoff zone: near the limit the runner may only hand off, and a run that ends without a valid handoff is recorded as `abnormal` — never silently lost.
+- **Lease ownership is bounded, runner policy is not prescribed.** A live runner continuously renews its fenced wake lease; if the supervisor dies, renewal stops and recovery can terminate the old process. Token, cost, timeout, and handoff-reserve policy belong to each runner implementation.
 
 goah does not replace your agent runner (pi, or any runner that implements the `Runner` interface). It sits above it.
 
@@ -33,7 +33,7 @@ Implemented and tested today:
 - Audit advice write/ack APIs and mandatory injection of unacknowledged advice into the action owner's next context
 - Connector capability manifests and isolated connector subprocesses: undeclared capabilities fail closed, ambient secrets are not inherited, automatic retry requires declared native idempotency
 - Runner-owned local execution: non-software goals need no Git, while coding agents can use ordinary Git and worktree commands through their skills
-- Real runner subprocess boundary with token/wall-clock limits, a handoff reserve zone, process-group termination, and stale-event rejection
+- Real runner subprocess boundary with sliding lease renewal, process-group termination, optional runner-specific timeout, and stale-event rejection
 - Mail acknowledged atomically with a valid handoff; abnormal wakes leave messages unread for redelivery
 - Injected clocks, schema v1→v3 migration, indexed bounded queries, and a public ledger conformance suite
 - Mechanical metric evaluation (missing/stale/sustain/guardrails), heartbeat escalation, trigger coalescing, FTS5 fact search, and generic evidence-backed actions
@@ -110,7 +110,7 @@ One wake, step by step:
 2. The supervisor leases it — one active wake per agent, lease expiry is crash detection.
 3. It hydrates bounded context from indexed ledger queries: owned goals, unread mail, unacknowledged audit advice, last handoff, and any recovery slice.
 4. The supervisor starts a runner subprocess only after the wake's lease token and PID are recorded. The child gets context and a local root, never a database connection or connector credentials.
-5. The process runs under token/wall-clock limits. A timeout kills the process group before recovery; stale lease tokens cannot append runner events.
+5. While the process is alive, the supervisor renews its fenced lease. If renewal stops, recovery kills the recorded process before another wake can own the agent. Runner-specific plugins may add token, timeout, cost, or handoff policy.
 6. A valid handoff atomically records the handoff, acknowledges consumed mail, delivers outgoing mail, and schedules the next wake. Local files and Git remain the runner's responsibility.
 7. Any other exit is `abnormal`: after process death is confirmed, a recovery wake can load the event slice and inspect partial files left in the same local root. Unacknowledged mail remains available.
 
@@ -132,7 +132,7 @@ requested ─▶ approved ─▶ dispatching ─▶ confirmed
 | `goah-ledger-contract` | nothing | The contract: types, state machines, schema assertions. Agent-side code depends only on this. |
 | `goah-ledger-sqlite` | contract | Single-writer SQLite ledger. Append-only events enforced by triggers, projections rebuildable from events. |
 | `goah-supervisor` | contract | Scheduler, wake lifecycle, action gate, and connector dispatch. It does not understand files, Git, workspaces, or artifacts. |
-| `goah-runner-pi` | contract | Worker-side Pi adapter plus supervisor-side `ProcessRunner`: IPC, timeout termination, handoff reserve, and trace forwarding. |
+| `goah-runner-pi` | contract | Worker-side Pi adapter plus supervisor-side `ProcessRunner`: IPC, optional adapter timeout, local tools, compaction, and trace forwarding. |
 | `goah-testkit` | all of the above | Simulated clock, faux process worker, isolated mock connector, public ledger conformance suite, and fault injection. |
 | `@goah/cli` | contract, SQLite, runner, supervisor | Versioned config, singleton daemon, status/doctor, goals, approvals, and dashboard. |
 

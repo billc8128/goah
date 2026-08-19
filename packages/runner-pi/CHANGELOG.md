@@ -3,6 +3,7 @@
 ## 0.2.0
 
 - Process runners accept a local `cwd`; Pi file, bash, and Git work execute directly under that root.
+- Removed core token/handoff limits; optional timeout and Pi compaction remain runner-owned policy.
 
 ## 0.1.0
 

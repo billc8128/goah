@@ -4,6 +4,7 @@
 
 - Removed the preassigned workspace path from `RunRequest`; local execution is owned by the runner.
 - Removed monetary goal budgets and the `budget.read` capability; domain policy is extension-owned.
+- Removed `RunLimits` and mandatory token usage from the public runner contract.
 
 ## 0.1.0
 
