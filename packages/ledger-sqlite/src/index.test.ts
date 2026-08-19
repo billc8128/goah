@@ -49,11 +49,13 @@ test("wake queue is FIFO, deduplicated, fenced and safely recovered", () => {
   const first = ledger.claimNextWake("2030-01-01T00:00:00.000Z", "2030-01-01T00:00:10.000Z", "lease-1");
   assert.equal(first?.id, "zzz");
   ledger.markWakeRunning("zzz", "2030-01-01T00:00:01.000Z", "lease-1");
+  ledger.renewWakeLease("zzz", "lease-1", "2030-01-01T00:00:20.000Z", "2030-01-01T00:00:02.000Z");
+  assert.equal(ledger.expiredWakes("2030-01-01T00:00:11.000Z").length, 0);
   assert.throws(() => ledger.appendRunnerEvent({ ts: "2030-01-01T00:00:02.000Z", agent: "a", kind: "trace", data: {}, wakeId: "zzz" }, "stale"), /stale/);
-  const expired = ledger.expiredWakes("2030-01-01T00:00:11.000Z");
+  const expired = ledger.expiredWakes("2030-01-01T00:00:21.000Z");
   assert.equal(expired[0]?.id, "zzz");
-  assert.equal(ledger.recoverExpiredWake("zzz", "2030-01-01T00:00:11.000Z").status, "abnormal");
-  assert.equal(ledger.claimNextWake("2030-01-01T00:00:11.000Z", "2030-01-01T00:00:20.000Z", "lease-2")?.id, "aaa");
+  assert.equal(ledger.recoverExpiredWake("zzz", "2030-01-01T00:00:21.000Z").status, "abnormal");
+  assert.equal(ledger.claimNextWake("2030-01-01T00:00:21.000Z", "2030-01-01T00:00:30.000Z", "lease-2")?.id, "aaa");
   ledger.close();
 });
 
@@ -217,6 +219,7 @@ test("fault injection rolls back every wake mutation point", () => {
     { name: "lease", setup: (l) => { l.enqueueWake(wake("w"), "supervisor"); }, mutate: (l) => { l.claimNextWake("2030-01-01T00:00:00.000Z", "2030-01-01T00:00:10.000Z", "lease"); } },
     { name: "running", setup: leased, mutate: (l) => { l.markWakeRunning("w", "2030-01-01T00:00:01.000Z", "lease"); } },
     { name: "pid", setup: running, mutate: (l) => { l.attachWakeProcess("w", "lease", 123, "2030-01-01T00:00:02.000Z"); } },
+    { name: "renew", setup: running, mutate: (l) => { l.renewWakeLease("w", "lease", "2030-01-01T00:00:20.000Z", "2030-01-01T00:00:02.000Z"); } },
     { name: "done", setup: running, mutate: (l) => { l.finishWake("w", "done", "2030-01-01T00:00:02.000Z"); } },
     { name: "abnormal", setup: running, mutate: (l) => { l.finishWake("w", "abnormal", "2030-01-01T00:00:02.000Z"); } },
     { name: "merge blocked", setup: running, mutate: (l) => { l.finishWake("w", "merge_blocked", "2030-01-01T00:00:02.000Z"); } },

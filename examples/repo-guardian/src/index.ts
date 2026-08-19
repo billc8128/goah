@@ -23,14 +23,8 @@ const piEnv = model ? {
 } : null;
 const runner = new ProcessRunner(model
   ? { command: process.execPath, args: [piWorkerPath()], cwd: repo, env: piEnv! }
-  : { command: process.execPath, args: [fauxRunnerWorkerPath()], cwd: repo, env: { GOAH_FAUX_STEPS: JSON.stringify([{ tokens: 10, handoff: { handoff: { observations: ["test status collected"], results: [], nextSteps: ["check again"] }, mail: [], nextWakeAt: new Date(Date.now() + 86_400_000).toISOString() } }]) } });
+  : { command: process.execPath, args: [fauxRunnerWorkerPath()], cwd: repo, env: { GOAH_FAUX_STEPS: JSON.stringify([{ handoff: { handoff: { observations: ["test status collected"], results: [], nextSteps: ["check again"] }, mail: [], nextWakeAt: new Date(Date.now() + 86_400_000).toISOString() } }]) } });
 const supervisor = new Supervisor(ledger, runner, new class { now(): Date { return new Date(); } }(), {
-  ...(model ? { limits: {
-    maxTotalTokens: Number(process.env.GOAH_PI_MAX_TOTAL_TOKENS ?? 2_000_000),
-    maxWallClockMs: Number(process.env.GOAH_PI_MAX_WALL_CLOCK_MS ?? 3_600_000),
-    handoffReserveTokens: Number(process.env.GOAH_PI_HANDOFF_RESERVE_TOKENS ?? 96_000),
-    handoffReserveWallClockMs: Number(process.env.GOAH_PI_HANDOFF_RESERVE_WALL_CLOCK_MS ?? 120_000),
-  } } : {}),
   heartbeatPolicies: [{ agent: "guardian", maxSilentMs: 172_800_000, escalateTo: "human" }],
   verifyMetricsAfterWake: Boolean(model),
   retryPolicy: { maxAttempts: 2, baseDelayMs: 5_000 },

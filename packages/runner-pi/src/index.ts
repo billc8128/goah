@@ -3,7 +3,6 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import {
   assertHandoff,
-  assertRunLimits,
   type JsonValue,
   type AgentCapability,
   type RunRequest,
@@ -15,14 +14,12 @@ import {
 
 export { createPiModel, parseModelCapabilities } from "./model-provider.js";
 
-export interface PiStepRequest { handoffOnly: boolean; remainingTokens: number }
 export interface PiStep {
-  tokensUsed: number;
   trace?: Array<{ kind: string; data: JsonValue }>;
   handoff?: WakeOutput;
   stopped?: boolean;
 }
-export interface PiSession { step(request: PiStepRequest): Promise<PiStep>; close(): Promise<void> }
+export interface PiSession { step(): Promise<PiStep>; close(): Promise<void> }
 export interface PiDriver { createSession(request: RunRequest): Promise<PiSession> }
 
 /** In-process adapter for tests and for use inside a ProcessRunner worker. */
@@ -48,34 +45,19 @@ export class PiRunnerAdapter {
   async terminateProcess(pid: number): Promise<void> { await terminatePid(pid, 500); }
 
   async #run(request: RunRequest): Promise<RunnerResult> {
-    assertRunLimits(request.limits);
     const session = await this.driver.createSession(request);
-    const startedAt = Date.parse(request.now());
-    let tokensUsed = 0;
-    let handoffOnly = false;
     try {
-      while (tokensUsed < request.limits.maxTotalTokens) {
-        const elapsed = Date.parse(request.now()) - startedAt;
-        handoffOnly ||= tokensUsed >= request.limits.maxTotalTokens - request.limits.handoffReserveTokens
-          || elapsed >= request.limits.maxWallClockMs - request.limits.handoffReserveWallClockMs;
-        if (elapsed >= request.limits.maxWallClockMs) {
-          return { outcome: "abnormal", reason: "wall-clock limit exceeded without a valid handoff", tokensUsed };
-        }
-        const step = await session.step({ handoffOnly, remainingTokens: request.limits.maxTotalTokens - tokensUsed });
-        if (!Number.isInteger(step.tokensUsed) || step.tokensUsed <= 0) {
-          return { outcome: "abnormal", reason: "runner returned a non-positive token charge", tokensUsed };
-        }
-        tokensUsed += step.tokensUsed;
+      while (true) {
+        const step = await session.step();
         for (const trace of step.trace ?? []) request.emit(trace);
         if (step.handoff) {
           assertHandoff(step.handoff.handoff);
-          return { outcome: "handoff", output: step.handoff, tokensUsed };
+          return { outcome: "handoff", output: step.handoff };
         }
-        if (step.stopped) return { outcome: "abnormal", reason: "runner stopped without a valid handoff", tokensUsed };
+        if (step.stopped) return { outcome: "abnormal", reason: "runner stopped without a valid handoff" };
       }
-      return { outcome: "abnormal", reason: "token limit exceeded without a valid handoff", tokensUsed };
     } catch (error) {
-      return { outcome: "abnormal", reason: error instanceof Error ? error.message : String(error), tokensUsed };
+      return { outcome: "abnormal", reason: error instanceof Error ? error.message : String(error) };
     } finally {
       await session.close();
     }
@@ -89,6 +71,7 @@ export interface ProcessRunnerOptions {
   env?: Record<string, string>;
   inheritEnv?: string[];
   killGraceMs?: number;
+  timeoutMs?: number;
 }
 
 export function piWorkerPath(): string { return fileURLToPath(new URL("./pi-worker.js", import.meta.url)); }
@@ -142,13 +125,13 @@ export class ProcessRunner implements Runner {
         void terminate();
       }
     });
-    child.once("error", (error) => { if (timer) clearTimeout(timer); settle({ outcome: "abnormal", reason: error.message, tokensUsed: 0 }); });
+    child.once("error", (error) => { if (timer) clearTimeout(timer); settle({ outcome: "abnormal", reason: error.message }); });
     child.once("close", (code, signal) => {
       if (timer) clearTimeout(timer);
-      if (protocolError) settle({ outcome: "abnormal", reason: `runner protocol error: ${protocolError}`, tokensUsed: 0 });
+      if (protocolError) settle({ outcome: "abnormal", reason: `runner protocol error: ${protocolError}` });
       else if (messageResult) settle(messageResult);
-      else if (timedOut) settle({ outcome: "abnormal", reason: "runner wall-clock limit exceeded and process was killed", tokensUsed: 0 });
-      else settle({ outcome: "abnormal", reason: stderr.trim() || `runner exited without a result (${code ?? signal ?? "unknown"})`, tokensUsed: 0 });
+      else if (timedOut) settle({ outcome: "abnormal", reason: "runner-specific timeout exceeded and process was killed" });
+      else settle({ outcome: "abnormal", reason: stderr.trim() || `runner exited without a result (${code ?? signal ?? "unknown"})` });
     });
 
     const terminate = async () => {
@@ -162,10 +145,9 @@ export class ProcessRunner implements Runner {
         const serializable: WorkerRequest = {
           wake: request.wake,
           context: request.context,
-          limits: request.limits,
         };
         child.stdin?.write(`${JSON.stringify({ type: "start", request: serializable } satisfies ParentMessage)}\n`);
-        timer = setTimeout(() => { timedOut = true; void terminate(); }, request.limits.maxWallClockMs);
+        if (this.options.timeoutMs) timer = setTimeout(() => { timedOut = true; void terminate(); }, this.options.timeoutMs);
       },
       result,
       terminate,

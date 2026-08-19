@@ -18,7 +18,6 @@ import {
   type MetricEvaluation,
   type MetricProcessSpec,
   type MetricSample,
-  type RunLimits,
   type Runner,
   type RunnerHandle,
   type ScheduleSnapshot,
@@ -28,7 +27,6 @@ import { defaultRolePrompt } from "./roles.js";
 
 export interface SupervisorOptions {
   leaseMs?: number;
-  limits?: RunLimits;
   allowExternalActions?: boolean;
   approvers?: string[];
   auditWriters?: string[];
@@ -40,11 +38,8 @@ export interface SupervisorOptions {
 
 interface MetricCollectorRegistration { goalId: string; spec: MetricProcessSpec; intervalMs: number; nextAt: number }
 
-const defaultLimits: RunLimits = { maxTotalTokens: 2_000_000, maxWallClockMs: 3_600_000, handoffReserveTokens: 96_000, handoffReserveWallClockMs: 120_000 };
-
 export class Supervisor {
   readonly #leaseMs: number;
-  readonly #limits: RunLimits;
   readonly #allowExternalActions: boolean;
   readonly #approvers: Set<string>;
   readonly #auditWriters: Set<string>;
@@ -57,8 +52,7 @@ export class Supervisor {
   readonly #verifyMetricsAfterWake: boolean;
 
   constructor(readonly ledger: Ledger, readonly runner: Runner, readonly clock: Clock, options: SupervisorOptions = {}) {
-    this.#limits = options.limits ?? defaultLimits;
-    this.#leaseMs = Math.max(options.leaseMs ?? 30_000, this.#limits.maxWallClockMs + 60_000);
+    this.#leaseMs = options.leaseMs ?? 30_000;
     this.#allowExternalActions = options.allowExternalActions ?? false;
     this.#approvers = new Set(options.approvers ?? ["human", "ceo"]);
     this.#auditWriters = new Set(options.auditWriters ?? ["verifier", "audit"]);
@@ -95,20 +89,28 @@ export class Supervisor {
     const leaseToken = claimed!.leaseToken;
     let running = wake;
     let handle: RunnerHandle | null = null;
+    let renewal: NodeJS.Timeout | undefined;
     try {
       running = this.ledger.markWakeRunning(wake.id, this.#now(), leaseToken);
       const context = this.#loadContext(running);
       handle = this.runner.prepare({
         wake: running,
         context,
-        limits: this.#limits,
         now: () => this.#now(),
         emit: (trace) => this.ledger.appendRunnerEvent({ ts: this.#now(), agent: running.agent, kind: `runner.${trace.kind}`, data: trace.data, wakeId: running.id }, leaseToken),
         rpc: (method, params) => this.#agentRpc(running, leaseToken, method, params),
       });
       if (handle.pid) running = this.ledger.attachWakeProcess(running.id, leaseToken, handle.pid, this.#now());
+      renewal = setInterval(() => {
+        try {
+          const now = this.clock.now();
+          this.ledger.renewWakeLease(running.id, leaseToken, new Date(now.getTime() + this.#leaseMs).toISOString(), now.toISOString());
+        } catch { void handle?.terminate(); }
+      }, Math.max(25, Math.floor(this.#leaseMs / 3)));
+      renewal.unref();
       handle.begin();
       const result = await handle.result;
+      clearInterval(renewal); renewal = undefined;
       await handle.terminate();
       if (result.outcome === "abnormal") {
         await this.#markAbnormal(running, result.reason);
@@ -126,6 +128,7 @@ export class Supervisor {
       }
       return this.#wake(running.id);
     } catch (error) {
+      if (renewal) clearInterval(renewal);
       if (handle) await handle.terminate();
       await this.#markAbnormal(running, error instanceof Error ? error.message : String(error));
       return this.#wake(running.id);

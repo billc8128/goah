@@ -29,8 +29,7 @@ test("CLI initializes versioned config, resolves secret references, and enforces
   assert.equal(initialized.version, 1);
   assert.equal(initialized.workspace, undefined);
   assert.equal(initialized.stateDir.startsWith(directory), false);
-  assert.equal(initialized.limits.maxTotalTokens, 2_000_000);
-  assert.equal(initialized.limits.maxTokens, undefined);
+  assert.equal(initialized.limits, undefined);
   process.env.GOAH_CLI_TEST_KEY = "secret";
   const raw = JSON.parse(readFileSync(join(directory, "goah.config.json"), "utf8"));
   raw.runner.env.ANTHROPIC_API_KEY = "env:GOAH_CLI_TEST_KEY";

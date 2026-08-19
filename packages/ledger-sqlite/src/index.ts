@@ -244,6 +244,16 @@ export class SqliteLedger implements Ledger {
     return next;
   }
 
+  renewWakeLease(id: string, leaseToken: string, leaseUntil: string, now: string): WakeSnapshot {
+    const current = this.#requiredWake(id);
+    this.#assertLease(current, leaseToken);
+    if (current.status !== "leased" && current.status !== "running") throw new Error("only an active wake lease may be renewed");
+    if (leaseUntil <= now) throw new Error("renewed lease must expire in the future");
+    const next: WakeSnapshot = { ...current, leaseUntil };
+    this.#project("wakes", next, "supervisor", "wake.lease_renewed", id, now);
+    return next;
+  }
+
   finishWake(id: string, status: "done" | "abnormal" | "merge_blocked", now: string): WakeSnapshot {
     const current = this.#requiredWake(id);
     const next: WakeSnapshot = { ...current, status, leaseUntil: null, leaseToken: null, runnerPid: null, endedAt: now };

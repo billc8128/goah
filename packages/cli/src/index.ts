@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { CONTRACT_VERSION, assertRunLimits, evaluateMetric, type AgentProfile, type ConnectorManifest, type MetricProcessSpec, type RunLimits } from "goah-ledger-contract";
+import { CONTRACT_VERSION, evaluateMetric, type AgentProfile, type ConnectorManifest, type MetricProcessSpec } from "goah-ledger-contract";
 import { SQLITE_SCHEMA_VERSION, SqliteLedger } from "goah-ledger-sqlite";
 import { createPiModel, piWorkerPath, ProcessRunner } from "goah-runner-pi";
 import { renderDashboard, runSupervisorDaemon, Supervisor } from "goah-supervisor";
@@ -12,7 +12,6 @@ export interface GoahConfig {
   version: 1;
   stateDir: string;
   runner: { command: string; args: string[]; env?: Record<string, string>; inheritEnv?: string[] };
-  limits?: RunLimits;
   profiles?: AgentProfile[];
   approvers?: string[];
   auditWriters?: string[];
@@ -38,11 +37,12 @@ const configRoots = new WeakMap<GoahConfig, string>();
 
 export function loadConfig(path = "goah.config.json", options: { resolveSecrets?: boolean } = {}): GoahConfig {
   const absolute = resolve(path);
-  const config = JSON.parse(readFileSync(absolute, "utf8")) as GoahConfig & { workspace?: string };
+  const config = JSON.parse(readFileSync(absolute, "utf8")) as GoahConfig & { workspace?: string; limits?: unknown };
   if (config.version !== 1) throw new Error(`unsupported goah config version: ${String(config.version)}`);
   const base = dirname(absolute);
   const root = config.workspace ? absolutePath(base, config.workspace) : base;
   delete config.workspace;
+  delete config.limits;
   configRoots.set(config, root);
   config.stateDir = absolutePath(base, config.stateDir);
   config.runner.command = resolveCommand(config.runner.command);
@@ -54,12 +54,10 @@ export function loadConfig(path = "goah.config.json", options: { resolveSecrets?
 }
 
 export function createRuntime(config: GoahConfig): { ledger: SqliteLedger; supervisor: Supervisor } {
-  if (config.limits) assertRunLimits(config.limits);
   mkdirSync(config.stateDir, { recursive: true });
   const ledger = new SqliteLedger(join(config.stateDir, "ledger.sqlite"));
   const runner = new ProcessRunner({ ...config.runner, cwd: configRoot(config) });
   const supervisor = new Supervisor(ledger, runner, new class { now(): Date { return new Date(); } }(), {
-    ...(config.limits ? { limits: config.limits } : {}),
     ...(config.profiles ? { profiles: config.profiles } : {}),
     ...(config.approvers ? { approvers: config.approvers } : {}),
     ...(config.auditWriters ? { auditWriters: config.auditWriters } : {}),
@@ -80,7 +78,6 @@ export function defaultConfig(directory: string, options: InitOptions = {}): Goa
     version: 1,
     stateDir: defaultStateDir(directory),
     runner: { command: process.execPath, args: ["$GOAH_PI_WORKER"], env: runnerEnv },
-    limits: { maxTotalTokens: 2_000_000, maxWallClockMs: 3_600_000, handoffReserveTokens: 96_000, handoffReserveWallClockMs: 120_000 },
     profiles: [{ agent: options.agent ?? "worker", role: "child" }],
     approvers: ["human", "ceo"],
     auditWriters: ["verifier", "audit"],
@@ -139,7 +136,6 @@ export function diagnoseConfig(config: GoahConfig): { ok: boolean; checks: Docto
     }
     finally { db.close(); }
   });
-  check("limits", () => { assertRunLimits(config.limits ?? defaultConfig(configRoot(config)).limits!); return JSON.stringify(config.limits); });
   check("runner", () => {
     accessSync(config.runner.command, constants.X_OK);
     const workerArg = config.runner.args[0];

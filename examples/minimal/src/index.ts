@@ -21,8 +21,8 @@ const runner = new ProcessRunner({
   args: [fauxRunnerWorkerPath()],
   cwd: repo,
   env: { GOAH_FAUX_STEPS: JSON.stringify([
-    { tokens: 100, write: { path: "result.txt", content: "goal reached\n" } },
-    { tokens: 50, handoff: { handoff: { observations: ["goal loaded"], results: ["result committed"], nextSteps: [] }, mail: [], nextWakeAt: null } },
+    { write: { path: "result.txt", content: "goal reached\n" } },
+    { handoff: { handoff: { observations: ["goal loaded"], results: ["result committed"], nextSteps: [] }, mail: [], nextWakeAt: null } },
   ]) },
 });
 const supervisor = new Supervisor(ledger, runner, clock);

@@ -13,7 +13,7 @@ import {
   type WakeOutput,
 } from "goah-ledger-contract";
 import { SqliteLedger, type SqliteLedgerOptions } from "goah-ledger-sqlite";
-import type { PiDriver, PiSession, PiStepRequest } from "goah-runner-pi";
+import type { PiDriver, PiSession } from "goah-runner-pi";
 
 export class SimulatedClock implements Clock {
   #value: Date;
@@ -26,15 +26,13 @@ export class SimulatedClock implements Clock {
 export function createMemoryLedger(options: SqliteLedgerOptions = {}): SqliteLedger { return new SqliteLedger(":memory:", options); }
 
 export interface FauxStep {
-  tokens: number;
   advanceMs?: number;
   trace?: Array<{ kind: string; data: JsonValue }>;
   write?: { path: string; content: string };
   handoff?: WakeOutput;
   stop?: boolean;
   crash?: string;
-  requireHandoffOnly?: boolean;
-  effect?: (request: RunRequest, mode: PiStepRequest) => void;
+  effect?: (request: RunRequest) => void;
 }
 
 export class FauxPiDriver implements PiDriver {
@@ -45,20 +43,18 @@ export class FauxPiDriver implements PiDriver {
     this.requests.push(request);
     const steps = this.#sessions.shift() ?? [];
     return {
-      step: async (mode) => {
+      step: async () => {
         const step = steps.shift();
-        if (!step) return { tokensUsed: 1, stopped: true };
-        if (step.requireHandoffOnly && !mode.handoffOnly) throw new Error("faux model expected handoff-only mode");
-        if (mode.handoffOnly && step.write) throw new Error("ordinary tool call attempted in handoff reserve");
+        if (!step) return { stopped: true };
         if (step.advanceMs) this.clock.advance(step.advanceMs);
         if (step.write) {
           const path = join(this.directory, step.write.path);
           mkdirSync(dirname(path), { recursive: true });
           writeFileSync(path, step.write.content);
         }
-        step.effect?.(request, mode);
+        step.effect?.(request);
         if (step.crash) throw new Error(step.crash);
-        return { tokensUsed: step.tokens, ...(step.trace ? { trace: step.trace } : {}), ...(step.handoff ? { handoff: step.handoff } : {}), ...(step.stop ? { stopped: true } : {}) };
+        return { ...(step.trace ? { trace: step.trace } : {}), ...(step.handoff ? { handoff: step.handoff } : {}), ...(step.stop ? { stopped: true } : {}) };
       },
       close: async () => undefined,
     };

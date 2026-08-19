@@ -144,13 +144,6 @@ export interface WakeOutput {
   nextWakeAt: string | null;
 }
 
-export interface RunLimits {
-  maxTotalTokens: number;
-  maxWallClockMs: number;
-  handoffReserveTokens: number;
-  handoffReserveWallClockMs: number;
-}
-
 export interface RunnerTraceEvent {
   kind: string;
   data: JsonValue;
@@ -176,15 +169,14 @@ export interface AgentProfile {
 export interface RunRequest {
   wake: WakeSnapshot;
   context: JsonValue;
-  limits: RunLimits;
   now(): string;
   emit(event: RunnerTraceEvent): void;
   rpc?(method: AgentCapability, params: JsonValue): Promise<JsonValue>;
 }
 
 export type RunnerResult =
-  | { outcome: "handoff"; output: WakeOutput; tokensUsed: number }
-  | { outcome: "abnormal"; reason: string; tokensUsed: number };
+  | { outcome: "handoff"; output: WakeOutput }
+  | { outcome: "abnormal"; reason: string };
 
 export interface RunnerHandle {
   pid: number | null;
@@ -260,6 +252,7 @@ export interface Ledger {
   claimNextWake(now: string, leaseUntil: string, leaseToken: string): WakeSnapshot | null;
   markWakeRunning(id: string, now: string, leaseToken: string): WakeSnapshot;
   attachWakeProcess(id: string, leaseToken: string, pid: number, now: string): WakeSnapshot;
+  renewWakeLease(id: string, leaseToken: string, leaseUntil: string, now: string): WakeSnapshot;
   finishWake(id: string, status: "done" | "abnormal" | "merge_blocked", now: string): WakeSnapshot;
   expiredWakes(now: string): WakeSnapshot[];
   recoverExpiredWake(id: string, now: string): WakeSnapshot;
@@ -327,18 +320,6 @@ export function assertActionTransition(from: ActionStatus, to: ActionStatus): vo
 export function assertHandoff(value: Handoff): void {
   if (!Array.isArray(value.observations) || !Array.isArray(value.results) || !Array.isArray(value.nextSteps)) {
     throw new Error("invalid handoff: observations, results and nextSteps are required arrays");
-  }
-}
-
-export function assertRunLimits(value: RunLimits): void {
-  if (value.maxTotalTokens <= 0 || value.maxWallClockMs <= 0 || value.handoffReserveTokens <= 0 || value.handoffReserveWallClockMs <= 0) {
-    throw new Error("run limits must be positive");
-  }
-  if (value.handoffReserveTokens >= value.maxTotalTokens) {
-    throw new Error("handoff reserve must be smaller than maxTotalTokens");
-  }
-  if (value.handoffReserveWallClockMs >= value.maxWallClockMs) {
-    throw new Error("handoff wall-clock reserve must be smaller than maxWallClockMs");
   }
 }
 

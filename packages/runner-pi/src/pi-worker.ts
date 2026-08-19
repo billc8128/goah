@@ -36,7 +36,6 @@ export async function runPiWorker(): Promise<void> {
     }
 
     let output: WakeOutput | null = null;
-    let tokensUsed = 0;
     let compactions = 0;
     const root = resolve(process.cwd());
     const tools = createTools(root, (value) => { output = value; }, process.env.GOAH_PI_ALLOW_BASH === "true", rpc, request.wake.startedAt);
@@ -58,28 +57,17 @@ export async function runPiWorker(): Promise<void> {
           emit({ kind: "context.compacted", data: { compaction: compactions, sourceMessageCount: messages.length } });
           view = compactMessagesToTokenBudget(messages, contextPolicy.retainAfterCompactTokens);
         }
-        if (tokensUsed < request.limits.maxTotalTokens - request.limits.handoffReserveTokens) return view;
-        return [...view, {
-          role: "user",
-          content: "Handoff reserve is active. Do not call any other tool. Call handoff now with the best verified state available.",
-          timestamp: Date.now(),
-        }];
+        return view;
       },
-      beforeToolCall: async ({ toolCall }) => {
-        const reserve = tokensUsed >= request.limits.maxTotalTokens - request.limits.handoffReserveTokens;
-        if (reserve && toolCall.name !== "handoff") return { block: true, reason: "handoff reserve active; only handoff is allowed" };
-        return undefined;
-      },
-      shouldStopAfterTurn: () => output !== null || tokensUsed >= request.limits.maxTotalTokens,
+      shouldStopAfterTurn: () => output !== null,
       toolExecution: "sequential",
     });
     agent.subscribe((event) => {
-      if (event.type === "message_end" && event.message.role === "assistant") tokensUsed += event.message.usage.totalTokens;
       emit({ kind: `pi.${event.type}`, data: JSON.parse(JSON.stringify(event)) as JsonValue });
     });
     await agent.prompt(`Wake started at: ${request.wake.startedAt ?? "unknown"}\nWake context:\n${JSON.stringify(request.context)}\n\nRunner root: ${root}. Manage local files and Git directly when the goal requires them.`);
-    if (!output) return { outcome: "abnormal", reason: "Pi worker exited without a valid handoff", tokensUsed };
-    return { outcome: "handoff", output, tokensUsed };
+    if (!output) return { outcome: "abnormal", reason: "Pi worker exited without a valid handoff" };
+    return { outcome: "handoff", output };
   });
 }
 
