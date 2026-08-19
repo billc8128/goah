@@ -50,6 +50,8 @@ Operational acceptance evidence **not yet produced**:
 
 - Real 7/14-day wall-clock soak evidence, a public sanitized long-run ledger, calibrated production verifier labels, and explicitly authorized small-money operation
 
+The completed real-model fault canary is documented in [`docs/canary/2026-08-19-ark-v0.3.1.md`](./docs/canary/2026-08-19-ark-v0.3.1.md): four wakes, one deliberate mid-tool SIGKILL, automatic retry, replay/Inspector verification, and two production findings fixed from the recorded evidence.
+
 ## Quick start
 
 Requires Node.js >= 24 (uses `node:sqlite`).
@@ -164,6 +166,7 @@ Mechanically enforced today:
 - Runner and connector code executes in child processes with minimal environments. Connector secrets are explicitly scoped to that connector; runners never receive a ledger connection. Control state defaults to `~/.goah/state`, outside the runner root.
 - The events table is append-only (enforced by SQLite triggers); invalid wake/action state transitions are rejected by both the library and the database.
 - `request.prepared` records model-visible behavior but excludes provider API keys, authorization headers, abort handles, and transport-private objects.
+- Recovery Active Context includes only the abnormal reason, interrupted/compaction markers, and tool calls with unknown outcomes; raw deltas and request snapshots remain in the ledger for explicit inspection.
 - Every action evidence sequence must exist. Gated actions require an authorized approval carrying its own reason and evidence.
 - Mail survives abnormal wakes, and unacknowledged audit advice is forced into the next context.
 - An `unknown` action is never automatically re-dispatched unless the connector manifest explicitly declares native idempotency and automatic retry.

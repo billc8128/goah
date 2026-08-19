@@ -151,6 +151,7 @@ next model request</pre>
 <tr><td>connector dispatching 时崩溃</td><td>action 转 unknown；查询外部状态后 confirmed/failed</td></tr>
 <tr><td>Supervisor 重启</td><td>恢复 dispatching action 与过期 wake；不并发重放仍存活的 runner</td></tr>
 </tbody></table>
+<p>恢复装载不展开上一 Session 的原始 delta 或 request snapshot；只选择 abnormal reason、interrupted/compaction 标记，以及 outcome unknown 的 tool call/result。完整流继续留在账本中供 Inspector 按需读取。</p>
 </section>
 
 <section>

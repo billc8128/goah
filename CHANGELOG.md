@@ -4,6 +4,7 @@
 
 - Added read-only Session list/show/replay/context/events inspection and redacted audit exports.
 - Request snapshots now use a behavior-only allowlist and never persist provider credentials or abort handles.
+- Recovery Active Context now selects only actionable failure facts instead of expanding raw deltas and request snapshots.
 
 ## 0.3.0
 

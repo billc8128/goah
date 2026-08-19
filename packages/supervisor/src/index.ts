@@ -27,10 +27,10 @@ import {
   type WakeSnapshot,
   wakeStream,
 } from "goah-ledger-contract";
-import { composeActiveContext } from "./context-view.js";
+import { composeActiveContext, selectRecoveryEvents } from "./context-view.js";
 import { defaultRolePrompt } from "./roles.js";
 
-export { composeActiveContext, type ActiveContextInput, type ActiveContextView } from "./context-view.js";
+export { composeActiveContext, selectRecoveryEvents, type ActiveContextInput, type ActiveContextView } from "./context-view.js";
 
 export interface SupervisorOptions {
   leaseMs?: number;
@@ -298,7 +298,7 @@ export class Supervisor {
     const recoveryId = wake.triggerRef.startsWith("recovery:")
       ? wake.triggerRef.slice("recovery:".length)
       : wake.triggerRef.startsWith("retry:") ? wake.triggerRef.slice("retry:".length).split("@")[0] : null;
-    const recoveryEvents = recoveryId ? this.ledger.eventsForWake(recoveryId) : [];
+    const recoveryEvents = recoveryId ? selectRecoveryEvents(this.ledger.eventsForWake(recoveryId)) : [];
     const teamHandoffs = role === "ceo"
       ? [...this.ledger.eventsSince(0, ["handoff.recorded"])].reverse().filter((event, index, all) => all.findIndex((candidate) => candidate.actor === event.actor) === index)
       : [];

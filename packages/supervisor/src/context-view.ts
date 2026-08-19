@@ -19,6 +19,17 @@ export interface ActiveContextInput {
   recoveryEvents: EventRecord[];
 }
 
+/** Keep recovery actionable and bounded; raw Session history remains queryable in the ledger. */
+export function selectRecoveryEvents(events: EventRecord[]): EventRecord[] {
+  const unknownCalls = new Set(events.filter((event) => event.type === "tool.completed" && field(field(event.data, "result"), "outcome") === "unknown").map((event) => String(field(event.data, "callId"))));
+  return events.filter((event) => {
+    if (["wake.abnormal_reason", "session.interrupted", "context.compacted"].includes(event.type)) return true;
+    if (event.type === "tool.called") return unknownCalls.has(String(field(event.data, "callId")));
+    if (event.type === "tool.completed") return unknownCalls.has(String(field(event.data, "callId")));
+    return false;
+  });
+}
+
 /** Deterministically render structured projections into the model's short working set. */
 export function composeActiveContext(input: ActiveContextInput): ActiveContextView {
   const handoff = input.lastHandoff?.data as { observations?: unknown; results?: unknown; nextSteps?: unknown; blocker?: unknown } | undefined;
@@ -49,3 +60,4 @@ export function composeActiveContext(input: ActiveContextInput): ActiveContextVi
 
 function lines(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string").map((item) => `- ${item}`) : []; }
 function render(value: JsonValue): string { return typeof value === "string" ? value : JSON.stringify(value); }
+function field(value: unknown, key: string): unknown { return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined; }
