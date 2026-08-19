@@ -16,32 +16,32 @@ goah is the harness around the agent that owns exactly that layer:
 
 - **The ledger is the agent.** Agent processes are short-lived: hydrate → work → handoff → exit. Everything durable lives in an append-only event ledger; every table is a projection that can be rebuilt from events. Crash recovery is replay, not heuristics.
 - **Every action is accountable.** An external action carries its `reason` and `evidence` (references to ledger events), passes a gate before dispatch, and has crash-safe delivery semantics — a crash mid-dispatch resolves to `unknown`, which is reconciled by querying, never blindly retried.
-- **Work survives, mistakes don't spread.** Each wake runs in its own git worktree. Merges are serial and rebase-based; a conflict blocks instead of overwriting. A crashed wake's partial work is preserved under a salvage ref for forensics.
+- **Execution stays local and inspectable.** The runner owns local files, bash, and Git under the directory containing `goah.config.json`. GOAH records process failure and recovery context; coding skills decide how to branch, commit, merge, or preserve partial Git work.
 - **Bounded runs by construction.** Every wake has hard token and wall-clock limits with a reserved handoff zone: near the limit the runner may only hand off, and a run that ends without a valid handoff is recorded as `abnormal` — never silently lost.
 
 goah does not replace your agent runner (pi, or any runner that implements the `Runner` interface). It sits above it.
 
 ## Status
 
-**Experimental.** Contracts are `0.1.0` / `experimental`. SQLite schema changes now use explicit, version-checked migrations; public TypeScript contracts may still change before 1.0.
+**Experimental.** Contracts are `0.2.0` / `experimental`. SQLite schema changes now use explicit, version-checked migrations; public TypeScript contracts may still change before 1.0.
 
 Implemented and tested today:
 
 - Append-only SQLite event ledger with five rebuildable projections (`goals`, `schedule`, `wakes`, `mailbox`, `actions`), event + projection committed in one transaction, fault-injection tested at every state transition
-- FIFO wake lifecycle with leases: per-agent concurrency of one, trigger deduplication, fencing tokens, recorded runner PIDs, and kill-before-salvage recovery
+- FIFO wake lifecycle with leases: per-agent concurrency of one, trigger deduplication, fencing tokens, recorded runner PIDs, and kill-before-recovery semantics
 - Action state machine with real evidence validation, human approval/rejection, `unknown` semantics, and query-based reconciliation
 - Audit advice write/ack APIs and mandatory injection of unacknowledged advice into the action owner's next context
 - Connector capability manifests and isolated connector subprocesses: undeclared capabilities fail closed, ambient secrets are not inherited, automatic retry requires declared native idempotency
-- Per-wake git worktrees with serial rebase-merge, retained refs for `merge_blocked` and abnormal work, and bounded checkout retention
+- Runner-owned local execution: non-software goals need no Git, while coding agents can use ordinary Git and worktree commands through their skills
 - Real runner subprocess boundary with token/wall-clock limits, a handoff reserve zone, process-group termination, and stale-event rejection
 - Mail acknowledged atomically with a valid handoff; abnormal wakes leave messages unread for redelivery
 - Injected clocks, schema v1→v3 migration, indexed bounded queries, and a public ledger conformance suite
 - Mechanical metric evaluation (missing/stale/sustain/guardrails), heartbeat escalation, trigger coalescing, FTS5 fact search, and goal-budget reservation windows
-- Official Pi 0.84.2 worker binding with workspace tools and model-view-only mid-turn compaction
-- Concurrent child agents, CEO global context, serialized artifact merges, resident daemon loop, and a static read-only dashboard
+- Official Pi 0.84.2 worker binding with local file/bash tools and model-view-only mid-turn compaction
+- Concurrent child agents, CEO global context, resident daemon loop, and a static read-only dashboard
 - Session verifier plus blind-first global audit interfaces, audit-advice delivery, and precision/risk-weighted-recall evaluation
 - Repo-guardian reference application, systemd/launchd templates, and an accelerated 30-day replay/continuity soak
-- Bidirectional fenced RPC with role capabilities, executable CEO/verifier/audit prompts, versioned configuration, singleton CLI controls, and workspace-ref recovery
+- Bidirectional fenced RPC with role capabilities, executable CEO/verifier/audit prompts, versioned configuration, and singleton CLI controls
 
 Operational acceptance evidence **not yet produced**:
 
@@ -90,11 +90,11 @@ Replace those sample limits with the selected model's published values.
 ```
             ┌──────────────────────────── supervisor (only resident process) ───────────────────────────┐
             │                                                                                           │
-  schedule ─┼─▶ enqueue wake ─▶ lease ─▶ prepare worktree ─▶ run agent ─▶ handoff ─▶ merge ─▶ done      │
+  schedule ─┼─▶ enqueue wake ─▶ lease ─▶ run local agent ─▶ handoff ─▶ done                           │
             │       │                                          │   │         │                          │
             │       │ dedupe by (agent, trigger_ref)           │   │         │ crash / no handoff       │
             │       ▼                                          │   │         ▼                          │
-            │   already queued? reuse                          │   │      abnormal + salvage ref        │
+            │   already queued? reuse                          │   │      abnormal + recovery context   │
             │                                                  │   │                                    │
             │                              actions (reason + evidence, gated) ─▶ connector dispatch     │
             │                                                      │                                    │
@@ -109,10 +109,10 @@ One wake, step by step:
 1. A due `schedule` entry becomes a queued `wake` (deduplicated by `(agent, trigger_ref)`).
 2. The supervisor leases it — one active wake per agent, lease expiry is crash detection.
 3. It hydrates bounded context from indexed ledger queries: owned goals, unread mail, unacknowledged audit advice, last handoff, and any recovery slice.
-4. The supervisor starts a runner subprocess only after the wake's lease token and PID are recorded. The child gets the context and worktree path, never a database connection or connector credentials.
-5. The process runs under token/wall-clock limits. A timeout kills the process group before the worktree can be salvaged; stale lease tokens cannot append runner events.
-6. A valid handoff atomically records the handoff, acknowledges consumed mail, delivers outgoing mail, and schedules the next wake. The worktree is then rebased and merged — or retained as a `merge_blocked` ref.
-7. Any other exit is `abnormal`: after process death is confirmed, partial work goes to a salvage ref and a recovery wake can load the event slice. Unacknowledged mail remains available.
+4. The supervisor starts a runner subprocess only after the wake's lease token and PID are recorded. The child gets context and a local root, never a database connection or connector credentials.
+5. The process runs under token/wall-clock limits. A timeout kills the process group before recovery; stale lease tokens cannot append runner events.
+6. A valid handoff atomically records the handoff, acknowledges consumed mail, delivers outgoing mail, and schedules the next wake. Local files and Git remain the runner's responsibility.
+7. Any other exit is `abnormal`: after process death is confirmed, a recovery wake can load the event slice and inspect partial files left in the same local root. Unacknowledged mail remains available.
 
 External actions follow their own state machine, independent of wake success:
 
@@ -131,10 +131,10 @@ requested ─▶ approved ─▶ dispatching ─▶ confirmed
 |---|---|---|
 | `goah-ledger-contract` | nothing | The contract: types, state machines, schema assertions. Agent-side code depends only on this. |
 | `goah-ledger-sqlite` | contract | Single-writer SQLite ledger. Append-only events enforced by triggers, projections rebuildable from events. |
-| `goah-supervisor` | contract | Scheduler, wake lifecycle, action gate, connector dispatch, git workspace manager. Never executes user code in-process. |
+| `goah-supervisor` | contract | Scheduler, wake lifecycle, action gate, and connector dispatch. It does not understand files, Git, workspaces, or artifacts. |
 | `goah-runner-pi` | contract | Worker-side Pi adapter plus supervisor-side `ProcessRunner`: IPC, timeout termination, handoff reserve, and trace forwarding. |
 | `goah-testkit` | all of the above | Simulated clock, faux process worker, isolated mock connector, public ledger conformance suite, and fault injection. |
-| `@goah/cli` | contract, SQLite, runner, supervisor | Versioned config, singleton daemon, status/doctor, goals, approvals, dashboard, and recovery refs. |
+| `@goah/cli` | contract, SQLite, runner, supervisor | Versioned config, singleton daemon, status/doctor, goals, approvals, and dashboard. |
 
 ## Security model
 
@@ -143,7 +143,7 @@ Read this before pointing goah at anything real.
 Mechanically enforced today:
 
 - No external side effects by default: a connector must declare a capability for an action's kind, and non-dry-run connectors additionally require an explicit supervisor opt-in. Anything undeclared is gated, fail-closed.
-- Runner and connector code executes in child processes with minimal environments. Connector secrets are explicitly scoped to that connector; runners never receive them or a ledger connection.
+- Runner and connector code executes in child processes with minimal environments. Connector secrets are explicitly scoped to that connector; runners never receive a ledger connection. Control state defaults to `~/.goah/state`, outside the runner root.
 - The events table is append-only (enforced by SQLite triggers); invalid wake/action state transitions are rejected by both the library and the database.
 - Every action evidence sequence must exist. Gated actions require an authorized approval carrying its own reason and evidence.
 - Mail survives abnormal wakes, and unacknowledged audit advice is forced into the next context.
@@ -153,13 +153,14 @@ Not guaranteed, by design honesty:
 
 - goah does not make the model's judgment correct. It records reasons and evidence; it cannot verify they are good reasons.
 - goah does not defend against prompt injection inside the agent's own context.
+- A runner with bash enabled is trusted local code and has the operating-system permissions of the user that launched it. GOAH does not sandbox arbitrary shell commands.
 
 ## Roadmap
 
 | Milestone | Scope |
 |---|---|
 | 0 — contracts & failure semantics | ✅ implementation complete: metric/action/wake/connector contracts, FTS5, conformance and fault injection |
-| 1A — durable core | ✅ implementation complete: daemon, process isolation, leases, recovery, worktree continuity, Pi binding |
+| 1A — durable core | ✅ implementation complete: daemon, process isolation, leases, recovery context, runner-owned local execution, Pi binding |
 | 1B — long-wake continuity | ✅ implementation complete: model-view compaction and accelerated continuity tests; real 10h soak still operational evidence |
 | 2 — narrow closed loop | ✅ repo-guardian implementation complete; real unattended 14-day run still operational evidence |
 | 3 — verification layer | ✅ verifier/global-audit interfaces, blind-first isolation and evaluation implemented; production calibration dataset remains operational work |

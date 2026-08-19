@@ -3,7 +3,7 @@
 All public packages evolve in lockstep under `CONTRACT_VERSION`. The current contract is experimental and additive evolution is preferred; SQLite changes require an explicit migration and future schema versions are rejected.
 
 - Ledger: append-only events plus five rebuildable projections; event and projection mutations are atomic.
-- Runner: process-isolated request/result protocol, lossless trace forwarding, fencing, hard limits, and structured handoff.
+- Runner: process-isolated request/result protocol, lossless trace forwarding, fencing, hard limits, structured handoff, and runner-owned local execution.
 - RPC: request/response IDs over the runner pipe; supervisor validates the active lease and role capability before every read or mutation.
 - Load: bounded role-specific context; unacknowledged audit advice is mandatory and raw hidden reasoning is never reloaded.
 - Handoff: observations, results, next steps, optional blocker, mail, and next wake.
