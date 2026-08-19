@@ -115,7 +115,18 @@ function option(name: string): string | null { const index = args.indexOf(name);
 function flag(name: string): boolean { return args.includes(name); }
 function required(name: string): string { const value = option(name); if (!value) throw new Error(`${name} is required`); return value; }
 function numberOption(name: string): number { const value = Number(required(name)); if (!Number.isInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer`); return value; }
-function requiredPositional(index: number, label: string): string { const value = args[index]; if (!value || value.startsWith("--")) throw new Error(`${label} is required`); return value; }
+function requiredPositional(index: number, label: string): string {
+  const positional: string[] = [];
+  const flags = new Set(["--wake-now", "--raw"]);
+  for (let cursor = 0; cursor < args.length; cursor += 1) {
+    const value = args[cursor]!;
+    if (!value.startsWith("--")) { positional.push(value); continue; }
+    if (!flags.has(value)) cursor += 1;
+  }
+  const value = positional[index];
+  if (!value) throw new Error(`${label} is required`);
+  return value;
+}
 function evidence(): number[] { return required("--evidence").split(",").map(Number); }
 function providerOption(value: string): PiProvider {
   if (!["anthropic", "openai", "ark-coding", "faux"].includes(value)) throw new Error(`unsupported provider: ${value}`);

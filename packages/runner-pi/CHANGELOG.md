@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- Request snapshots use an explicit behavior allowlist and exclude API keys, authorization data, signals, and transport-private objects.
+
 ## 0.3.0
 
 - Normalizes Pi lifecycle, message, delta, and tool events into the Goah Session vocabulary.

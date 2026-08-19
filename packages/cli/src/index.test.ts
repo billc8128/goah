@@ -63,9 +63,10 @@ test("CLI runs the install-to-first-handoff path with the faux provider", () => 
   const sessions = JSON.parse(invoke(directory, "session", "list"));
   assert.equal(sessions[0].wakeId, wakeId);
   assert.equal(sessions[0].sessionStatus, "completed");
-  const detail = JSON.parse(invoke(directory, "session", "show", wakeId));
+  const detail = JSON.parse(invoke(directory, "session", "show", "--config", "goah.config.json", wakeId));
   assert.equal(detail.eventTypes["request.prepared"], 1);
-  assert.ok(detail.replay.messages.length > 0);
+  assert.ok(detail.replay.messageCount > 0);
+  assert.equal(JSON.stringify(detail).includes("apiKey"), false);
   const context = JSON.parse(invoke(directory, "context", "show", wakeId));
   assert.match(context.text, /Complete the first handoff/);
   const events = JSON.parse(invoke(directory, "events", "--stream", `wake:${wakeId}`));

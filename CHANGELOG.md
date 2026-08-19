@@ -3,6 +3,7 @@
 ## 0.3.1
 
 - Added read-only Session list/show/replay/context/events inspection and redacted audit exports.
+- Request snapshots now use a behavior-only allowlist and never persist provider credentials or abort handles.
 
 ## 0.3.0
 

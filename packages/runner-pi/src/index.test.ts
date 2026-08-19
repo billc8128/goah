@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { RunRequest, WakeSnapshot, WakeOutput } from "goah-ledger-contract";
 import { PiRunnerAdapter, ProcessRunner, type PiDriver } from "./index.js";
-import { compactMessages, compactMessagesToTokenBudget, resolveContextPolicy, validateNextWakeAt } from "./pi-worker.js";
+import { compactMessages, compactMessagesToTokenBudget, resolveContextPolicy, snapshotModelConfig, validateNextWakeAt } from "./pi-worker.js";
 import { createPiModel, providerApiKey } from "./model-provider.js";
 
 const wake: WakeSnapshot = { id: "w", agent: "a", triggerRef: "t", status: "running", leaseUntil: "2026-08-18T00:01:00.000Z", attempt: 1, startedAt: "2026-08-18T00:00:00.000Z", endedAt: null, enqueuedSeq: 1, leaseToken: "lease", runnerPid: null };
@@ -115,4 +115,10 @@ test("handoff rejects stale next-wake times", () => {
   assert.equal(validateNextWakeAt("2026-08-19T01:00:00Z", startedAt), "2026-08-19T01:00:00.000Z");
   assert.throws(() => validateNextWakeAt("2025-08-19T01:00:00Z", startedAt), /later than/);
   assert.throws(() => validateNextWakeAt("not-a-date", startedAt), /later than/);
+});
+
+test("request snapshots allowlist model behavior and never persist credentials", () => {
+  const snapshot = snapshotModelConfig({ transport: "auto", toolExecution: "sequential", temperature: 0.4, apiKey: "secret-key", signal: {}, headers: { authorization: "Bearer secret" }, model: { id: "m" } });
+  assert.deepEqual(snapshot, { transport: "auto", toolExecution: "sequential", temperature: 0.4 });
+  assert.doesNotMatch(JSON.stringify(snapshot), /secret|apiKey|authorization/i);
 });

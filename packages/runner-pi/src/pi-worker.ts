@@ -73,7 +73,7 @@ export async function runPiWorker(): Promise<void> {
             activeContext,
             messages: JSON.parse(JSON.stringify(context.messages)) as JsonValue,
             tools: (context.tools ?? []).map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters as unknown as JsonValue })),
-            modelConfig: JSON.parse(JSON.stringify(options ?? {})) as JsonValue,
+            modelConfig: snapshotModelConfig(options),
             sourceSeqs,
           },
         });
@@ -112,6 +112,20 @@ export async function runPiWorker(): Promise<void> {
     if (!output) return { outcome: "abnormal", reason: "Pi worker exited without a valid handoff" };
     return { outcome: "handoff", output };
   });
+}
+
+/** Persist only model behavior, never transport credentials or abort handles. */
+export function snapshotModelConfig(options: unknown): JsonValue {
+  if (!options || typeof options !== "object" || Array.isArray(options)) return {};
+  const record = options as Record<string, unknown>;
+  const allowed = ["transport", "toolExecution", "temperature", "topP", "maxTokens", "reasoning", "thinkingLevel", "toolChoice"];
+  return Object.fromEntries(allowed.flatMap((key) => isJson(record[key]) ? [[key, JSON.parse(JSON.stringify(record[key])) as JsonValue]] : []));
+}
+
+function isJson(value: unknown): boolean {
+  if (value === null || ["string", "number", "boolean"].includes(typeof value)) return true;
+  if (Array.isArray(value)) return value.every(isJson);
+  return Boolean(value && typeof value === "object" && Object.values(value as Record<string, unknown>).every(isJson));
 }
 
 function sessionMessage(message: AgentMessage, id: string): SessionMessage {

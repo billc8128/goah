@@ -16,7 +16,7 @@ Goah 0.3 introduces three logical layers without adding a service boundary:
 2. Session runtime normalizes runner events into Goah-owned message, tool, request, compaction, and terminal events. `replaySession()` derives model-visible messages. Recovery closes open tool calls with an explicit `unknown` result.
 3. Execution modules own Goal, Wake, Schedule, Mailbox, Action, and Handoff semantics. Their SQLite projections remain transactionally updated with the source event in the default implementation.
 
-Supervisor builds an ephemeral Active Context View by deterministically rendering structured projections to Markdown. The composer does not call a model. The runner records the exact rendered context, system prompt, messages, tools, and model configuration in `request.prepared` immediately before dispatch.
+Supervisor builds an ephemeral Active Context View by deterministically rendering structured projections to Markdown. The composer does not call a model. The runner records the exact rendered context, system prompt, messages, tools, and behavior-affecting model configuration in `request.prepared` immediately before dispatch. Authentication values, authorization headers, abort handles, and transport-private objects are excluded mechanically.
 
 Goal no longer requires a metric or target. Applications may register a metric contract and collector independently.
 

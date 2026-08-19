@@ -22,7 +22,7 @@ export interface SessionListItem {
 export interface SessionDetail {
   session: SessionListItem;
   eventTypes: Record<string, number>;
-  replay: ReplayedSession;
+  replay: { status: ReplayedSession["status"]; messageCount: number; openToolCalls: ReplayedSession["openToolCalls"] };
   requests: number;
   activeContext: SessionContextSnapshot | null;
 }
@@ -56,12 +56,13 @@ export function listSessions(ledger: SqliteLedger): SessionListItem[] {
 export function showSession(ledger: SqliteLedger, wakeId: string): SessionDetail {
   const wake = requiredWake(ledger, wakeId);
   const events = ledger.eventsForWake(wakeId);
+  const replay = replaySession(events);
   const eventTypes: Record<string, number> = {};
   for (const event of events) eventTypes[event.type] = (eventTypes[event.type] ?? 0) + 1;
   return {
     session: summarize(ledger, wake),
     eventTypes,
-    replay: replaySession(events),
+    replay: { status: replay.status, messageCount: replay.messages.length, openToolCalls: replay.openToolCalls },
     requests: eventTypes["request.prepared"] ?? 0,
     activeContext: contextSnapshot(events),
   };
@@ -91,7 +92,7 @@ export function exportSession(ledger: SqliteLedger, wakeId: string, options: { r
     redacted: !options.raw,
     session: detail.session,
     context: detail.activeContext,
-    replay: detail.replay,
+    replay: replaySession(ledger.eventsForWake(wakeId)),
     events: ledger.eventsForWake(wakeId),
   };
   return options.raw ? value : redactValue(value) as unknown as SessionExport;

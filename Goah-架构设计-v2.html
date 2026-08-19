@@ -80,7 +80,7 @@ next model request</pre>
 <p>每个 wake 默认拥有一个 <code>wake:&lt;id&gt;</code> Session stream。runner 的内部事件必须映射为 Goah 的稳定 vocabulary，不能把 Pi 私有对象结构直接当长期协议。</p>
 <table><thead><tr><th>事件</th><th>载荷与用途</th></tr></thead><tbody>
 <tr><td><code>session.started</code></td><td>runner、provider、model 与能力</td></tr>
-<tr><td><code>request.prepared</code></td><td>实际 system prompt、Active Context、messages、tools、model config 与来源 seq</td></tr>
+<tr><td><code>request.prepared</code></td><td>实际 system prompt、Active Context、messages、tools、行为参数与来源 seq；永不记录 API key / authorization / signal</td></tr>
 <tr><td><code>message.user</code></td><td>进入模型表面的用户/合成输入</td></tr>
 <tr><td><code>message.assistant.delta</code></td><td>原始流式增量；用于流重放与取证</td></tr>
 <tr><td><code>message.assistant.completed</code></td><td>组装完成的模型消息；用于重建下一次模型历史</td></tr>
