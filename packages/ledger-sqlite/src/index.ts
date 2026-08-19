@@ -15,6 +15,7 @@ import {
   type EventRecord,
   goalStream,
   type GoalSnapshot,
+  type GoalCompletionRequest,
   type HandoffCommit,
   type JsonValue,
   type Ledger,
@@ -32,12 +33,13 @@ type FaultInjector = (point: FaultPoint) => void;
 type Row = Record<string, unknown>;
 type ProjectionName = "goals" | "schedule" | "wakes" | "mailbox" | "actions";
 
-export const SQLITE_SCHEMA_VERSION = 7;
+export const SQLITE_SCHEMA_VERSION = 8;
 
 const createGoals = `CREATE TABLE IF NOT EXISTS goals (
   id TEXT PRIMARY KEY,
   parent_id TEXT REFERENCES goals(id),
   objective TEXT NOT NULL,
+  observation_method TEXT CHECK(observation_method IS NULL OR length(trim(observation_method)) > 0),
   owner TEXT NOT NULL,
   phase TEXT NOT NULL CHECK(phase IN ('active','paused','blocked','complete')),
   revision INTEGER NOT NULL CHECK(revision >= 0)
@@ -197,16 +199,12 @@ export class SqliteLedger implements Ledger {
     const current = this.#getGoal(goal.id);
     if (current) {
       if (goal.revision !== current.revision + 1) throw new Error("goal revision CAS failed");
+      if (current.phase === "complete") throw new Error("completed goal cannot be modified");
       if (goal.parentId !== current.parentId) throw new Error("goal reparenting is not supported");
+      if (goal.phase === "complete") throw new Error("goal completion requires reason and evidence");
+      if (goal.objective !== current.objective && current.observationMethod !== null && goal.observationMethod === current.observationMethod) throw new Error("objective revision must replace or invalidate the observation method");
       assertGoalTransition(current.phase, goal.phase);
       this.#assertGoalAuthority(current.parentId, actor);
-      if (current.parentId === null && goal.phase === "complete") {
-        const open = this.db.prepare(`WITH RECURSIVE descendants(id) AS (
-          SELECT id FROM goals WHERE parent_id=?
-          UNION ALL SELECT g.id FROM goals g JOIN descendants d ON g.parent_id=d.id
-        ) SELECT 1 FROM goals WHERE id IN (SELECT id FROM descendants) AND phase<>'complete' LIMIT 1`).get(goal.id);
-        if (open) throw new Error("root goal cannot complete while descendants remain non-complete");
-      }
     } else {
       if (goal.revision !== 0) throw new Error("new goal revision must be 0");
       this.#assertGoalAuthority(goal.parentId, actor);
@@ -217,11 +215,11 @@ export class SqliteLedger implements Ledger {
   commitDelegation(request: DelegationRequest, actor: string, wakeId?: string): DelegationResult {
     const existing = this.#delegationResult(request.id);
     if (existing) {
-      if (existing.goal.id !== request.childGoal.id || existing.goal.parentId !== request.parentGoalId || existing.goal.objective !== request.childGoal.objective || existing.goal.owner !== request.childGoal.owner) throw new Error("delegation id was reused with a different child goal");
+      if (existing.goal.id !== request.childGoal.id || existing.goal.parentId !== request.parentGoalId || existing.goal.objective !== request.childGoal.objective || existing.goal.observationMethod !== request.childGoal.observationMethod || existing.goal.owner !== request.childGoal.owner) throw new Error("delegation id was reused with a different child goal");
       return existing;
     }
     if (!request.id.trim() || !request.reason.trim()) throw new Error("delegation id and reason are required");
-    if (!request.childGoal.id.trim() || !request.childGoal.objective.trim() || !request.childGoal.owner.trim()) throw new Error("delegation child goal is incomplete");
+    if (!request.childGoal.id.trim() || !request.childGoal.objective.trim() || !request.childGoal.observationMethod.trim() || !request.childGoal.owner.trim()) throw new Error("delegation child goal is incomplete");
     this.#assertEvidenceExists(request.evidence);
     const parent = this.#getGoal(request.parentGoalId);
     if (!parent) throw new Error("delegation parent goal does not exist");
@@ -236,7 +234,7 @@ export class SqliteLedger implements Ledger {
         to: goal.owner,
         from: actor,
         level: "decision",
-        body: { type: "delegation", delegationId: request.id, goalId: goal.id, parentGoalId: request.parentGoalId, brief: request.brief, reason: request.reason, evidence: request.evidence },
+        body: { type: "delegation", delegationId: request.id, goalId: goal.id, parentGoalId: request.parentGoalId, objective: goal.objective, observationMethod: goal.observationMethod, brief: request.brief, reason: request.reason, evidence: request.evidence },
         readAt: null,
       };
       const wakeBase: WakeSnapshot = {
@@ -299,6 +297,27 @@ export class SqliteLedger implements Ledger {
       const wake = { ...wakeBase, enqueuedSeq: this.#nextEventSeq() };
       this.#recordProjection("wakes", wake, "supervisor", "wake.enqueued", wake.id, undefined, wake.enqueuedSeq);
       return { reassignmentId: request.id, goal, mail, wake };
+    });
+  }
+
+  completeGoal(request: GoalCompletionRequest, actor: string, wakeId?: string): GoalSnapshot {
+    if (!request.reason.trim()) throw new Error("goal completion reason is required");
+    this.#assertEvidenceExists(request.evidence);
+    const current = this.#getGoal(request.goalId);
+    if (!current) throw new Error("goal does not exist");
+    if (request.revision !== current.revision) throw new Error("goal completion revision is stale");
+    if (current.phase === "complete") return current;
+    if (current.observationMethod === null) throw new Error("goal completion requires an observation method");
+    this.#assertGoalAuthority(current.parentId, actor);
+    if (current.parentId === null && this.#hasNonCompleteDescendant(current.id)) throw new Error("root goal cannot complete while descendants remain non-complete");
+    const source = this.db.prepare("SELECT seq FROM events WHERE stream_id=? AND type='goal.put' AND json_extract(data,'$.snapshot.revision')=? ORDER BY seq DESC LIMIT 1").get(goalStream(current.id), current.revision) as { seq: number } | undefined;
+    if (!source) throw new Error("goal revision has no source event");
+    if (request.evidence.some((seq) => seq <= source.seq)) throw new Error("goal completion evidence predates the current revision");
+    return this.#transaction(() => {
+      this.#insertEvent({ streamId: goalStream(current.id), ts: this.#now(), actor, type: "goal.completion_decided", data: { goalId: current.id, revision: current.revision, observationMethod: current.observationMethod, reason: request.reason, evidence: request.evidence } });
+      const next: GoalSnapshot = { ...current, phase: "complete", revision: current.revision + 1 };
+      this.#recordProjection("goals", next, actor, "goal.put", wakeId, undefined, undefined, goalStream(current.id));
+      return next;
     });
   }
 
@@ -563,6 +582,13 @@ export class SqliteLedger implements Ledger {
     if (parent.owner !== actor) throw new Error("only the parent goal owner may modify a child goal");
   }
 
+  #hasNonCompleteDescendant(goalId: string): boolean {
+    return Boolean(this.db.prepare(`WITH RECURSIVE descendants(id) AS (
+      SELECT id FROM goals WHERE parent_id=?
+      UNION ALL SELECT g.id FROM goals g JOIN descendants d ON g.parent_id=d.id
+    ) SELECT 1 FROM goals WHERE id IN (SELECT id FROM descendants) AND phase<>'complete' LIMIT 1`).get(goalId));
+  }
+
   #assertEvidenceExists(evidence: number[]): void {
     const exists = this.db.prepare("SELECT 1 FROM events WHERE seq=?");
     for (const seq of evidence) if (!Number.isInteger(seq) || seq <= 0 || !exists.get(seq)) throw new Error(`evidence event does not exist: ${seq}`);
@@ -602,8 +628,9 @@ export class SqliteLedger implements Ledger {
 
   #applyProjection(projection: ProjectionName, raw: unknown, sourceSeq: number): void {
     if (projection === "goals") {
-      const v = raw as GoalSnapshot;
-      this.db.prepare(`INSERT INTO goals VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET parent_id=excluded.parent_id,objective=excluded.objective,owner=excluded.owner,phase=excluded.phase,revision=excluded.revision`).run(v.id,v.parentId,v.objective,v.owner,v.phase,v.revision);
+      const old = raw as Omit<GoalSnapshot, "observationMethod"> & { observationMethod?: string | null };
+      const v: GoalSnapshot = { ...old, observationMethod: old.observationMethod ?? null };
+      this.db.prepare(`INSERT INTO goals VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET parent_id=excluded.parent_id,objective=excluded.objective,observation_method=excluded.observation_method,owner=excluded.owner,phase=excluded.phase,revision=excluded.revision`).run(v.id,v.parentId,v.objective,v.observationMethod,v.owner,v.phase,v.revision);
     } else if (projection === "schedule") {
       const v = raw as ScheduleSnapshot;
       this.db.prepare(`INSERT INTO schedule VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET agent=excluded.agent,next_wake_at=excluded.next_wake_at,reason=excluded.reason,set_by=excluded.set_by`).run(v.id,v.agent,v.nextWakeAt,v.reason,v.setBy);
@@ -630,6 +657,8 @@ export class SqliteLedger implements Ledger {
 
   #migrateLegacy(): void {
     this.#transaction(() => {
+      const goalColumns = new Set((this.db.prepare("PRAGMA table_info(goals)").all() as Array<{ name: string }>).map((row) => row.name));
+      const observationSource = goalColumns.has("observation_method") ? "observation_method" : "NULL";
       this.db.exec(`PRAGMA defer_foreign_keys=ON;
         DROP TRIGGER IF EXISTS events_no_update; DROP TRIGGER IF EXISTS events_no_delete; DROP TRIGGER IF EXISTS events_fts_insert;
         DROP TRIGGER IF EXISTS wakes_valid_transition; DROP TRIGGER IF EXISTS actions_valid_transition; DROP TRIGGER IF EXISTS goals_valid_transition;
@@ -639,7 +668,7 @@ export class SqliteLedger implements Ledger {
         DROP TABLE IF EXISTS events_fts;
 
         ALTER TABLE goals RENAME TO goals_legacy; ${createGoals}
-        INSERT INTO goals(id,parent_id,objective,owner,phase,revision) SELECT id,parent_id,objective,owner,phase,revision FROM goals_legacy;
+        INSERT INTO goals(id,parent_id,objective,observation_method,owner,phase,revision) SELECT id,parent_id,objective,${observationSource},owner,phase,revision FROM goals_legacy;
         DROP TABLE goals_legacy;`);
 
       const wakeColumns = new Set((this.db.prepare("PRAGMA table_info(wakes)").all() as Array<{ name: string }>).map((row) => row.name));
@@ -692,7 +721,7 @@ export class SqliteLedger implements Ledger {
 }
 
 function mapEvent(r: Row): EventRecord { return { seq: Number(r.seq), streamId: String(r.stream_id), streamSeq: Number(r.stream_seq), ts: String(r.ts), actor: String(r.actor), type: String(r.type), data: JSON.parse(String(r.data)) as JsonValue, ...(Number(r.ignorable) === 1 ? { ignorable: true as const } : {}) }; }
-function mapGoal(r: Row): GoalSnapshot { return { id: String(r.id), parentId: r.parent_id === null ? null : String(r.parent_id), objective: String(r.objective), owner: String(r.owner), phase: String(r.phase) as GoalSnapshot["phase"], revision: Number(r.revision) }; }
+function mapGoal(r: Row): GoalSnapshot { return { id: String(r.id), parentId: r.parent_id === null ? null : String(r.parent_id), objective: String(r.objective), observationMethod: r.observation_method === null || r.observation_method === undefined ? null : String(r.observation_method), owner: String(r.owner), phase: String(r.phase) as GoalSnapshot["phase"], revision: Number(r.revision) }; }
 function mapSchedule(r: Row): ScheduleSnapshot { return {id:String(r.id),agent:String(r.agent),nextWakeAt:String(r.next_wake_at),reason:String(r.reason),setBy:String(r.set_by)}; }
 function mapWake(r: Row): WakeSnapshot { return {id:String(r.id),agent:String(r.agent),triggerRef:String(r.trigger_ref),status:String(r.status) as WakeSnapshot["status"],leaseUntil:r.lease_until===null?null:String(r.lease_until),attempt:Number(r.attempt),startedAt:r.started_at===null?null:String(r.started_at),endedAt:r.ended_at===null?null:String(r.ended_at),enqueuedSeq:Number(r.enqueued_seq),leaseToken:r.lease_token===null?null:String(r.lease_token),runnerPid:r.runner_pid===null?null:Number(r.runner_pid)}; }
 function mapMail(r: Row): MailSnapshot { return {id:String(r.id),to:String(r.to_agent),from:String(r.from_agent),level:String(r.level) as MailSnapshot["level"],body:JSON.parse(String(r.body)),readAt:r.read_at===null?null:String(r.read_at)}; }
