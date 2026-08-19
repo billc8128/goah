@@ -4,6 +4,7 @@ import {
   capabilityFor,
   controlStream,
   evaluateMetric,
+  goalStream,
   interruptedSessionEvents,
   type ActionSnapshot,
   type AgentCapability,
@@ -17,6 +18,7 @@ import {
   type DelegationRequest,
   type DelegationResult,
   type GoalSnapshot,
+  type GoalCompletionRequest,
   type GoalPhase,
   type JsonValue,
   type Ledger,
@@ -87,7 +89,7 @@ export class Supervisor {
   createGoal(goal: GoalSnapshot, actor = "human"): void { this.ledger.putGoal(goal, actor); }
   startGoal(objective: string, id: string = randomUUID()): { goal: GoalSnapshot; wake: WakeSnapshot } {
     if (!objective.trim()) throw new Error("root objective is required");
-    const goal: GoalSnapshot = { id, parentId: null, objective, owner: "ceo", phase: "active", revision: 0 };
+    const goal: GoalSnapshot = { id, parentId: null, objective, observationMethod: null, owner: "ceo", phase: "active", revision: 0 };
     this.ledger.putGoal(goal, "human");
     const wake = this.#enqueueTrigger("ceo", `root:${id}:created`);
     if (!wake) throw new Error("CEO wake was not admitted for an active root goal");
@@ -103,23 +105,48 @@ export class Supervisor {
   delegate(request: DelegationRequest, actor = "ceo", wakeId?: string): DelegationResult { return this.ledger.commitDelegation(request, actor, wakeId); }
   reassignGoal(request: ReassignmentRequest, actor = "ceo", wakeId?: string): ReassignmentResult { return this.ledger.commitReassignment(request, actor, wakeId); }
   teamList(now = this.#now()): TeamMemberView[] { return deriveTeam(this.ledger, now); }
-  updateGoal(id: string, patch: Partial<Pick<GoalSnapshot, "objective" | "owner">>, actor = "human"): GoalSnapshot {
-    if (patch.objective === undefined && patch.owner === undefined) throw new Error("goal update requires objective or owner");
+  updateGoal(id: string, patch: Partial<Pick<GoalSnapshot, "objective" | "observationMethod" | "owner">>, actor = "human"): GoalSnapshot {
+    if (patch.objective === undefined && patch.observationMethod === undefined && patch.owner === undefined) throw new Error("goal update requires objective, observation method, or owner");
     const current = this.#goal(id);
-    const next = { ...current, ...patch, revision: current.revision + 1 };
+    if (patch.objective !== undefined && patch.objective !== current.objective && current.parentId !== null && patch.observationMethod === undefined) throw new Error("child objective revision requires a replacement observation method");
+    const next = {
+      ...current,
+      ...patch,
+      ...(patch.objective !== undefined && patch.objective !== current.objective && current.parentId === null && patch.observationMethod === undefined ? { observationMethod: null } : {}),
+      revision: current.revision + 1,
+    };
     this.ledger.putGoal(next, actor);
     if (next.parentId === null && next.owner === "ceo" && actor === "human") this.#enqueueTrigger("ceo", `root:${id}:revised:${next.revision}`);
     return next;
   }
+  confirmObservationMethod(id: string, observationMethod: string): GoalSnapshot {
+    const current = this.#goal(id);
+    if (current.parentId !== null) throw new Error("human confirmation applies only to a root goal");
+    return this.updateGoal(id, { observationMethod }, "human");
+  }
+  reviseChildGoal(id: string, objective: string, observationMethod: string, actor: string, reason: string, evidence: number[], wakeId?: string): GoalSnapshot {
+    const current = this.#goal(id);
+    if (current.parentId === null) throw new Error("CEO cannot revise a root goal");
+    if (!reason.trim()) throw new Error("goal revision reason is required");
+    for (const seq of evidence) if (!this.ledger.eventsSince(seq - 1).some((event) => event.seq === seq)) throw new Error(`evidence event does not exist: ${seq}`);
+    this.ledger.appendEvent({ streamId: wakeId ? wakeStream(wakeId) : goalStream(id), ts: this.#now(), actor, type: "goal.revision_requested", data: { goalId: id, fromRevision: current.revision, objective, observationMethod, reason, evidence } });
+    return this.updateGoal(id, { objective, observationMethod }, actor);
+  }
+  completeGoal(request: GoalCompletionRequest, actor = "human", wakeId?: string): GoalSnapshot {
+    const goal = this.ledger.completeGoal(request, actor, wakeId);
+    this.#suppressQueuedWake(goal.owner, `goal:${goal.id}:complete`);
+    if (goal.parentId && actor !== "ceo") this.#enqueueTrigger("ceo", `goal:${goal.id}:complete:${goal.revision}`);
+    return goal;
+  }
   transitionGoal(id: string, phase: GoalPhase, actor = "human"): GoalSnapshot {
     const current = this.#goal(id);
     if (current.phase === phase) return current;
-    if (current.parentId === null && phase === "complete" && this.#hasNonCompleteDescendant(id)) throw new Error("root goal cannot complete while descendants remain non-complete");
+    if (phase === "complete") throw new Error("goal completion requires reason and evidence");
     const next = { ...current, phase, revision: current.revision + 1 };
     this.ledger.putGoal(next, actor);
-    if (phase === "complete" || phase === "paused") this.#suppressQueuedWake(next.owner, `goal:${id}:${phase}`);
+    if (phase === "paused") this.#suppressQueuedWake(next.owner, `goal:${id}:${phase}`);
     if (phase === "active") this.#enqueueTrigger(next.owner, `${next.parentId ? "goal" : "root"}:${id}:resumed:${next.revision}`);
-    if (next.parentId && actor !== "ceo" && (phase === "complete" || phase === "blocked")) this.#enqueueTrigger("ceo", `goal:${id}:${phase}:${next.revision}`);
+    if (next.parentId && actor !== "ceo" && phase === "blocked") this.#enqueueTrigger("ceo", `goal:${id}:${phase}:${next.revision}`);
     return next;
   }
 
@@ -229,6 +256,7 @@ export class Supervisor {
     const capability = connector ? capabilityFor(connector.manifest, action.kind) : null;
     const gated = !connector || !capability || capability.risk !== "reversible"
       || (!connector.manifest.dryRun && !this.#allowExternalActions);
+    if (gated && action.agent !== "ceo") this.#assertAgentGoalsCurrent(action.agent);
     const requested: ActionSnapshot = { ...action, connector: connectorName, gated, status: "requested", reconciledAt: null, externalRef: null };
     this.ledger.requestAction(requested, action.agent, wakeId);
     if (gated || !connector) return this.#action(action.id);
@@ -353,31 +381,23 @@ export class Supervisor {
   }
 
   #hasActiveRoot(): boolean { return this.ledger.goals().some((goal) => goal.parentId === null && goal.owner === "ceo" && goal.phase === "active"); }
-  #hasNonCompleteDescendant(rootId: string): boolean {
-    const goals = this.ledger.goals();
-    const descendants = new Set([rootId]);
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (const goal of goals) if (goal.parentId && descendants.has(goal.parentId) && !descendants.has(goal.id)) { descendants.add(goal.id); changed = true; }
-    }
-    return goals.some((goal) => goal.id !== rootId && descendants.has(goal.id) && goal.phase !== "complete");
-  }
   #role(agent: string): AgentRole { return this.#profiles.get(agent)?.role ?? "child"; }
 
   #validateCeoHandoff(wake: WakeSnapshot, output: WakeOutput): void {
     if (this.#role(wake.agent) !== "ceo") return;
     const idle = this.teamList().filter((member) => member.agent !== "ceo" && member.status === "idle_unplanned");
+    const missingObservationGoalIds = this.ledger.goals().filter((goal) => goal.parentId !== null && goal.phase !== "complete" && goal.observationMethod === null).map((goal) => goal.id);
     const activeRoot = this.#hasActiveRoot();
     const hasChildMotion = this.teamList().some((member) => member.agent !== "ceo" && !["idle_unplanned", "retired"].includes(member.status));
     const hasReview = Boolean(output.nextWakeAt);
     const hasBlocker = Boolean(output.handoff.blocker);
     const asksHuman = output.mail.some((mail) => mail.to === "human" && (mail.level === "decision" || mail.level === "emergency"))
       || this.ledger.unreadMail("human").some((mail) => mail.from === "ceo" && (mail.level === "decision" || mail.level === "emergency"));
-    if (idle.length === 0 && (!activeRoot || hasChildMotion || hasReview || hasBlocker || asksHuman)) return;
+    if (idle.length === 0 && missingObservationGoalIds.length === 0 && (!activeRoot || hasChildMotion || hasReview || hasBlocker || asksHuman)) return;
     const violation = {
       idleAgents: idle.map((member) => member.agent),
-      reason: idle.length ? "active child goal has no liveness route" : "active root has no motion, review, wait, blocker, or human request",
+      missingObservationGoalIds,
+      reason: missingObservationGoalIds.length ? "active child goal has no observation method" : idle.length ? "active child goal has no liveness route" : "active root has no motion, review, wait, blocker, or human request",
     };
     this.ledger.appendEvent({ streamId: wakeStream(wake.id), ts: this.#now(), actor: "supervisor", type: "ceo.motion_invalid", data: violation });
     throw new Error(`CEO motion invalid: ${violation.reason}${violation.idleAgents.length ? ` (${violation.idleAgents.join(", ")})` : ""}`);
@@ -398,13 +418,26 @@ export class Supervisor {
       ? [...this.ledger.eventsSince(0, ["handoff.recorded"])].reverse().filter((event, index, all) => all.findIndex((candidate) => candidate.actor === event.actor) === index)
       : [];
     const actions = this.ledger.actions().filter((action) => action.agent === wake.agent && (action.status === "unknown" || Boolean(action.auditAdvice && !action.adviceAcked)));
-    return composeActiveContext({ role, capabilities, systemPrompt: profile.systemPrompt ?? defaultRolePrompt(role), wake, goals, mail, actions, lastHandoff: handoff, teamHandoffs, team: role === "ceo" ? this.teamList() : [], recoveryEvents }) as unknown as JsonValue;
+    const revisionWarnings = goals.flatMap((goal) => this.#goalRevisionWarning(goal));
+    return composeActiveContext({ role, capabilities, systemPrompt: profile.systemPrompt ?? defaultRolePrompt(role), wake, goals, mail, actions, lastHandoff: handoff, teamHandoffs, team: role === "ceo" ? this.teamList() : [], revisionWarnings, recoveryEvents }) as unknown as JsonValue;
   }
 
   #requiredConnector(name: string): ConnectorProcessSpec { const value = this.#connectors.get(name); if (!value) throw new Error(`connector not registered: ${name}`); return value; }
   #wake(id: string): WakeSnapshot { const value = this.ledger.wake(id); if (!value) throw new Error(`wake not found: ${id}`); return value; }
   #action(id: string): ActionSnapshot { const value = this.ledger.action(id); if (!value) throw new Error(`action not found: ${id}`); return value; }
   #goal(id: string): GoalSnapshot { const value = this.ledger.goal(id); if (!value) throw new Error(`goal not found: ${id}`); return value; }
+  #goalRevisionWarning(goal: GoalSnapshot): string[] {
+    if (goal.parentId === null || goal.phase === "complete") return [];
+    let root = this.#goal(goal.parentId);
+    while (root.parentId !== null) root = this.#goal(root.parentId);
+    const rootSeq = this.ledger.readStream(goalStream(root.id)).filter((event) => event.type === "goal.put").at(-1)?.seq ?? 0;
+    const goalSeq = this.ledger.readStream(goalStream(goal.id)).filter((event) => event.type === "goal.put").at(-1)?.seq ?? 0;
+    return rootSeq > goalSeq ? [`Goal ${goal.id} predates root revision ${root.revision}; CEO must revise its objective/observation method before new gated actions.`] : [];
+  }
+  #assertAgentGoalsCurrent(agent: string): void {
+    const warnings = this.ledger.goalsForOwner(agent).flatMap((goal) => this.#goalRevisionWarning(goal));
+    if (warnings.length) throw new Error(warnings.join(" "));
+  }
   #now(): string { return this.clock.now().toISOString(); }
 
   async #agentRpc(wake: WakeSnapshot, leaseToken: string, method: AgentCapability, params: JsonValue): Promise<JsonValue> {
@@ -433,10 +466,9 @@ export class Supervisor {
       reason: String(input.reason),
       evidence: numberArray(input.evidence),
     }, wake.agent, wake.id) as unknown as JsonValue;
-    if (method === "goal.pause" || method === "goal.resume" || method === "goal.complete") {
-      const phase = method === "goal.pause" ? "paused" : method === "goal.resume" ? "active" : "complete";
-      return this.transitionGoal(String(input.goalId), phase, wake.agent) as unknown as JsonValue;
-    }
+    if (method === "goal.revise") return this.reviseChildGoal(String(input.goalId), String(input.objective), String(input.observationMethod), wake.agent, String(input.reason), numberArray(input.evidence), wake.id) as unknown as JsonValue;
+    if (method === "goal.pause" || method === "goal.resume") return this.transitionGoal(String(input.goalId), method === "goal.pause" ? "paused" : "active", wake.agent) as unknown as JsonValue;
+    if (method === "goal.complete") return this.completeGoal({ goalId: String(input.goalId), revision: Number(input.revision), reason: String(input.reason), evidence: numberArray(input.evidence) }, wake.agent, wake.id) as unknown as JsonValue;
     if (method === "human.request") {
       const evidence = numberArray(input.evidence);
       for (const seq of evidence) if (!this.ledger.eventsSince(seq - 1).some((event) => event.seq === seq)) throw new Error(`evidence event does not exist: ${seq}`);
@@ -574,12 +606,12 @@ function minimalEnvironment(explicit: Record<string, string> = {}): NodeJS.Proce
 function escapeHtml(value: string): string { return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"); }
 function asRecord(value: JsonValue): Record<string, JsonValue> { if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("RPC params must be an object"); return value; }
 function numberArray(value: JsonValue | undefined): number[] { if (!Array.isArray(value) || value.some((item) => typeof item !== "number")) throw new Error("RPC evidence must be a number array"); return value as number[]; }
-function asChildGoal(value: JsonValue | undefined): { id: string; objective: string; owner: string } {
+function asChildGoal(value: JsonValue | undefined): { id: string; objective: string; observationMethod: string; owner: string } {
   const input = asRecord(value ?? null);
-  return { id: String(input.id), objective: String(input.objective), owner: String(input.owner) };
+  return { id: String(input.id), objective: String(input.objective), observationMethod: String(input.observationMethod), owner: String(input.owner) };
 }
 function defaultCapabilities(role: AgentRole): AgentCapability[] {
-  if (role === "ceo") return ["ledger.search", "mail.send", "schedule.set", "action.submit", "audit.ack", "team.list", "goal.delegate", "goal.reassign", "goal.pause", "goal.resume", "goal.complete", "human.request"];
+  if (role === "ceo") return ["ledger.search", "mail.send", "schedule.set", "action.submit", "audit.ack", "team.list", "goal.delegate", "goal.reassign", "goal.revise", "goal.pause", "goal.resume", "goal.complete", "human.request"];
   if (role === "verifier") return ["ledger.search", "mail.send", "audit.write"];
   if (role === "audit") return ["ledger.search", "mail.send", "audit.write"];
   return ["ledger.search", "mail.send", "schedule.set", "action.submit", "audit.ack"];
