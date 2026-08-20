@@ -4,7 +4,7 @@
 
 Agents handle tasks. goah holds the goal.
 
-[![CI](https://github.com/billc8128/goah/actions/workflows/ci.yml/badge.svg)](https://github.com/billc8128/goah/actions/workflows/ci.yml)
+[![CI](https://github.com/billc8128/opengoah/actions/workflows/ci.yml/badge.svg)](https://github.com/billc8128/opengoah/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 ![Status](https://img.shields.io/badge/status-experimental-orange.svg)
 
@@ -54,12 +54,21 @@ Operational acceptance evidence **not yet produced**:
 
 The completed real-model fault canary is documented in [`docs/canary/2026-08-19-ark-v0.3.1.md`](./docs/canary/2026-08-19-ark-v0.3.1.md): four wakes, one deliberate mid-tool SIGKILL, automatic retry, replay/Inspector verification, and two production findings fixed from the recorded evidence.
 
+## Website
+
+The product site lives in [`apps/web`](./apps/web) as a Next.js, TypeScript, Tailwind CSS, and shadcn-structured application.
+
+```bash
+npm run web:dev
+npm run web:build
+```
+
 ## Quick start
 
 Requires Node.js >= 24 (uses `node:sqlite`).
 
 ```bash
-git clone https://github.com/billc8128/goah.git
+git clone https://github.com/billc8128/opengoah.git
 cd goah
 npm install
 npm test          # 71 contract, replay, organization, observation, control-socket, recovery, approval, audit, and connector tests

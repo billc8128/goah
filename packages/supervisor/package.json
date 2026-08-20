@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/billc8128/goah.git",
+    "url": "git+https://github.com/billc8128/opengoah.git",
     "directory": "packages/supervisor"
   },
   "engines": {

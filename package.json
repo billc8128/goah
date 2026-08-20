@@ -5,10 +5,11 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/billc8128/goah.git"
+    "url": "git+https://github.com/billc8128/opengoah.git"
   },
   "type": "module",
   "workspaces": [
+    "apps/*",
     "packages/*",
     "examples/*"
   ],
@@ -20,7 +21,9 @@
     "soak:real": "npm run build && node scripts/run-soak.mjs",
     "example": "npm run build && node examples/minimal/dist/index.js",
     "example:guardian": "npm run build && node examples/repo-guardian/dist/index.js",
-    "pack:smoke": "npm run build && node scripts/pack-smoke.mjs"
+    "pack:smoke": "npm run build && node scripts/pack-smoke.mjs",
+    "web:dev": "npm run dev --workspace @goah/web",
+    "web:build": "npm run build --workspace @goah/web"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
