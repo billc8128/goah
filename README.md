@@ -80,24 +80,26 @@ npm run test:soak
 Initialize and operate a configured supervisor:
 
 ```bash
-npm install --save-dev @goah/cli
-npx goah init --provider anthropic --model claude-sonnet-4-6
-npx goah doctor
-npx goah "Launch a profitable store"
+npm install --global @goah/cli
+goah init --provider anthropic --model claude-sonnet-4-6
+goah doctor
+goah "Launch a profitable store"
 # Reattach later:
-npx goah --continue
+goah --continue
 ```
+
+The global CLI is the default product path: after installation, `goah` works from any directory and initializes that directory as its local workspace. For TypeScript library integration instead, install `@goah/cli` in the project and use its documented subpath exports.
 
 The normal product flow is one human objective through CEO. Lower-level Goal controls remain available for inspection, extensions, and human root authority:
 
 ```bash
-npx goah goal-create --id first-goal --owner worker --objective "Complete the first verified handoff" --observation-method "Inspect a fresh evidence-backed handoff" --wake-now
-npx goah goal-show first-goal
-npx goah goal-update first-goal --objective "Updated objective" --observation-method "Inspect evidence for the updated objective"
-npx goah goal-pause first-goal
-npx goah goal-resume first-goal
-npx goah goal-complete first-goal --reason "observation passed" --evidence <seq>
-npx goah status
+goah goal-create --id first-goal --owner worker --objective "Complete the first verified handoff" --observation-method "Inspect a fresh evidence-backed handoff" --wake-now
+goah goal-show first-goal
+goah goal-update first-goal --objective "Updated objective" --observation-method "Inspect evidence for the updated objective"
+goah goal-pause first-goal
+goah goal-resume first-goal
+goah goal-complete first-goal --reason "observation passed" --evidence <seq>
+goah status
 ```
 
 `goah` starts the resident Supervisor when necessary and attaches the interactive CEO. `/goal ...` revises the active root and invalidates its old observation method; `/observe ...` confirms the replacement through human authority. `goah start` remains the explicit daemon command and `goah wake <agent>` queues a manual wake. Provider credentials stay as `env:NAME` references in `goah.config.json`; `doctor` resolves and validates them without printing them. For an offline installation check, use `goah init --provider faux`.
@@ -105,12 +107,12 @@ npx goah status
 Inspect and export the replayable Session ledger without requiring provider credentials:
 
 ```bash
-npx goah session list
-npx goah session show <wake-id>
-npx goah session replay <wake-id>
-npx goah context show <wake-id>
-npx goah events --stream wake:<wake-id> [--from 1]
-npx goah session export <wake-id> --output session.json
+goah session list
+goah session show <wake-id>
+goah session replay <wake-id>
+goah context show <wake-id>
+goah events --stream wake:<wake-id> [--from 1]
+goah session export <wake-id> --output session.json
 ```
 
 `session show` summarizes event types, request count, replayed messages, and the last Active Context. Export is redacted by default: common secret fields, bearer/API-key patterns, and the current home path are removed while event identities remain intact. `--raw` is an explicit local-only escape hatch and may contain sensitive prompts and tool results.
@@ -118,7 +120,7 @@ npx goah session export <wake-id> --output session.json
 Ark Coding Plan requires explicit model capabilities because its model-list API does not publish context/output limits:
 
 ```bash
-npx goah init --provider ark-coding --model glm-5.2 \
+goah init --provider ark-coding --model glm-5.2 \
   --api-key-env ARK_API_KEY \
   --context-window-tokens 256000 \
   --max-output-tokens 32000

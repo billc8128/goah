@@ -165,7 +165,7 @@ a progress or completion judgment.`}</code></pre>
           <h2 className="mx-auto mt-7 max-w-[920px] text-balance text-4xl font-medium leading-[1] tracking-[-0.035em] sm:text-6xl">One objective is enough to begin.</h2>
           <p className="mx-auto mt-7 max-w-[560px] text-lg leading-8 text-white/85">Install the CLI, choose a model, then talk to the CEO. The Supervisor, Ledger, and local runners stay on your machine.</p>
           <div className="mx-auto mt-10 flex max-w-[560px] items-center gap-3 rounded-full bg-white p-1.5 pl-5 text-left font-mono text-xs text-black">
-            <span className="text-[#1237ff]">$</span><code className="min-w-0 flex-1 truncate">npm install --save-dev @goah/cli</code><CopyCommand command="npm install --save-dev @goah/cli" theme="light" />
+            <span className="text-[#1237ff]">$</span><code className="min-w-0 flex-1 truncate">npm install --global @goah/cli</code><CopyCommand command="npm install --global @goah/cli" theme="light" />
           </div>
           <div className="mt-6 flex flex-col justify-center gap-3 sm:flex-row">
             <Button asChild className="h-11 rounded-full bg-white px-5 text-black shadow-none hover:bg-white/90"><a href={`${githubUrl}#quick-start`}>Open quick start <ArrowUpRight className="size-4" /></a></Button>
