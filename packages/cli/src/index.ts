@@ -213,5 +213,6 @@ function alive(pid: number): boolean { try { process.kill(pid, 0); return true; 
 export function configRoot(config: GoahConfig): string { return configRoots.get(config) ?? process.cwd(); }
 export { exportSession, listSessions, redactValue, replayWakeSession, showSession, showSessionContext, streamEvents } from "./inspect.js";
 export { controlAvailable, controlEndpoint, requestControl, runControlServer, streamControl, type ControlFrame, type ControlRequest } from "./control.js";
+export { consoleMetadataPath, consoleSnapshot, organizationTrajectory, readConsoleMetadata, runWebConsole, type ConsoleMetadata, type TrajectoryItem, type TrajectoryPage } from "./web-console.js";
 export type { SessionContextSnapshot, SessionDetail, SessionExport, SessionListItem } from "./inspect.js";
 export { CONTRACT_VERSION };

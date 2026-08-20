@@ -12,6 +12,7 @@ mkdirSync(artifacts); mkdirSync(app);
 const packed = JSON.parse(execFileSync("npm", ["pack", "--workspace", "packages/cli", "--pack-destination", artifacts, "--json"], { cwd: root, encoding: "utf8" }));
 const tarball = join(artifacts, packed[0].filename);
 if (packed[0].bundled?.length !== 5) throw new Error(`single distribution omitted internal modules: ${JSON.stringify(packed[0].bundled)}`);
+if (!packed[0].files?.some((file) => file.path === "dist/console/index.html")) throw new Error("single distribution omitted Console assets");
 
 writeFileSync(join(app, "package.json"), `${JSON.stringify({ name: "goah-install-smoke", private: true, version: "1.0.0" }, null, 2)}\n`);
 execFileSync("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", tarball], { cwd: app, stdio: "pipe" });

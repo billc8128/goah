@@ -14,7 +14,7 @@
     "examples/*"
   ],
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && npm run console:build",
     "typecheck": "tsc -b --pretty false",
     "test": "npm run build && node --test packages/*/dist/*.test.js",
     "test:soak": "npm run build && node --test --test-name-pattern='accelerated 30-day soak' packages/testkit/dist/index.test.js",
@@ -23,7 +23,9 @@
     "example:guardian": "npm run build && node examples/repo-guardian/dist/index.js",
     "pack:smoke": "npm run build && node scripts/pack-smoke.mjs",
     "web:dev": "npm run dev --workspace @goah/web",
-    "web:build": "npm run build --workspace @goah/web"
+    "web:build": "npm run build --workspace @goah/web",
+    "console:dev": "npm run dev --workspace @goah/console",
+    "console:build": "npm run build --workspace @goah/console && node scripts/copy-console-assets.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
